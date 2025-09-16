@@ -8,28 +8,63 @@
     Now includes a modern web interface for better user experience.
 .NOTES
     Author: Mohamed ZEGHLACHE
-    Version: 2.0
+    Version: 2.1
     Requires: Active Directory PowerShell Module, Domain Admin privileges
 .EXAMPLE
     .\ADAudit.ps1
     Starts the web interface on http://localhost:8080
-    
+
 .EXAMPLE
     .\ADAudit.ps1 -Port 9090
     Starts the web interface on http://localhost:9090
-    
-.EXAMPLE  
+
+.EXAMPLE
     .\ADAudit.ps1 -NoWebServer
     Runs in traditional command-line mode
 #>
 
+[CmdletBinding()]
 param(
+    [ValidateScript({Test-Path $_ -IsValid})]
     [string]$OutputPath = "C:\ADaudit",
+
+    [ValidateNotNullOrEmpty()]
     [string]$ReportName = "AD_Audit_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').html",
+
+    [ValidateRange(1024, 65535)]
     [int]$Port = 8080,
+
     [switch]$NoWebServer,
     [switch]$SkipExecution
 )
+
+# Set strict mode for better error handling
+Set-StrictMode -Version Latest
+
+# Helper function to safely get count of objects
+function Get-SafeCount {
+    param($Object)
+    if ($null -eq $Object) { return 0 }
+    if ($Object -is [array]) { return $Object.Count }
+    if ($Object -is [System.Collections.ICollection]) { return $Object.Count }
+    if ($Object.GetType().GetProperty("Count")) { return $Object.Count }
+    return 1  # Single object
+}
+
+# Helper function to safely access object properties
+function Get-SafeProperty {
+    param(
+        $Object,
+        [string]$PropertyName,
+        $DefaultValue = "N/A"
+    )
+    if ($null -eq $Object) { return $DefaultValue }
+    if ($Object.PSObject.Properties[$PropertyName]) {
+        $value = $Object.$PropertyName
+        return if ($null -ne $value) { $value } else { $DefaultValue }
+    }
+    return $DefaultValue
+}
 
 # Global variables for web server and progress tracking
 $Global:ProgressData = @{
@@ -59,7 +94,14 @@ try {
 
 # Web Server Functions
 function Find-AvailablePort {
-    param([int]$StartPort = 8080, [int]$EndPort = 8090)
+    [CmdletBinding()]
+    param(
+        [ValidateRange(1024, 65535)]
+        [int]$StartPort = 8080,
+
+        [ValidateRange(1024, 65535)]
+        [int]$EndPort = 8090
+    )
     
     for ($port = $StartPort; $port -le $EndPort; $port++) {
         $listener = $null
@@ -73,7 +115,11 @@ function Find-AvailablePort {
         catch {
             # Port is in use, try next one
             if ($listener) {
-                try { $listener.Stop() } catch { }
+                try {
+                    $listener.Stop()
+                } catch {
+                    Write-Verbose "Failed to stop listener: $_"
+                }
             }
         }
     }
@@ -81,12 +127,16 @@ function Find-AvailablePort {
 }
 
 function Start-WebServer {
-    param([int]$Port = 8080)
+    [CmdletBinding()]
+    param(
+        [ValidateRange(1024, 65535)]
+        [int]$Port = 8080
+    )
     
     try {
         # Stop any existing web server first
         if ($Global:HttpListener -and $Global:HttpListener.IsListening) {
-            Write-Host "Stopping existing web server..." -ForegroundColor Yellow
+            Write-Information "Stopping existing web server..." -InformationAction Continue
             $Global:HttpListener.Stop()
             $Global:HttpListener = $null
         }
@@ -106,8 +156,8 @@ function Start-WebServer {
             $Global:HttpListener.Start()
         }
         
-        Write-Host "🌐 Web server started at http://localhost:$ActualPort" -ForegroundColor Green
-        Write-Host "🚀 Opening browser..." -ForegroundColor Yellow
+        Write-Information "🌐 Web server started at http://localhost:$ActualPort" -InformationAction Continue
+        Write-Information "🚀 Opening browser..." -InformationAction Continue
         
         # Open browser
         Start-Process "http://localhost:$ActualPort"
@@ -133,7 +183,11 @@ function Start-WebServer {
 }
 
 function Handle-WebRequest {
-    param($Context)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Net.HttpListenerContext]$Context
+    )
     
     $request = $Context.Request
     $response = $Context.Response
@@ -183,7 +237,11 @@ function Handle-WebRequest {
 }
 
 function Serve-LauncherPage {
-    param($Response)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Net.HttpListenerResponse]$Response
+    )
     
     $htmlContent = @"
 <!DOCTYPE html>
@@ -201,18 +259,18 @@ function Serve-LauncherPage {
         }
         
         .check-item.running {
-            background-color: #e3f2fd;
-            border-left-color: #0d6efd;
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            border-left-color: #2196f3;
         }
-        
+
         .check-item.completed {
-            background-color: #d1e7dd;
-            border-left-color: #198754;
+            background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+            border-left-color: #4caf50;
         }
-        
+
         .check-item.error {
-            background-color: #fff3cd;
-            border-left-color: #ffc107;
+            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
+            border-left-color: #ffab00;
         }
         
         .feature-icon {
@@ -614,6 +672,7 @@ function Handle-StartAudit {
         $Config = @{
             AzureAdConnect = $Global:ProgressData.AuditConfig.AzureAdConnect
             ConditionalAccess = $Global:ProgressData.AuditConfig.ConditionalAccess
+            PkiInfra = $Global:ProgressData.AuditConfig.PkiInfra
         }
         
         # Start the audit execution in a background runspace
@@ -716,7 +775,7 @@ function Serve-Report {
         # If no filename provided, find the most recent report
         if (-not $Filename -or $Filename -eq "") {
             $reportFiles = Get-ChildItem -Path $OutputPath -Filter "*.html" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-            if ($reportFiles) {
+            if ($reportFiles -and $reportFiles.Count -gt 0) {
                 $Filename = $reportFiles[0].Name
             } else {
                 $Response.StatusCode = 404
@@ -767,7 +826,7 @@ function Update-Progress {
     
     # Also display in console
     $percent = [math]::Round(($Global:ProgressData.CurrentStep / $Global:ProgressData.TotalSteps) * 100, 1)
-    Write-Host "[$percent%] $Status" -ForegroundColor Cyan
+    Write-Information "[$percent%] $Status" -InformationAction Continue
 }
 
 function Stop-WebServer {
@@ -958,7 +1017,12 @@ function Start-WebAuditExecution {
 }
 
 function Start-TraditionalAuditExecution {
-    param($Config, $OutputPath, $ReportName)
+    [CmdletBinding()]
+    param(
+        [hashtable]$Config = @{},
+        [string]$OutputPath,
+        [string]$ReportName
+    )
     
     # Initialize variables for the main audit
     $AuditResults = @{}
@@ -1294,7 +1358,7 @@ try {
                                 }
                             }
                         } catch {
-                            # Invalid date format, skip
+                            Write-Verbose "Invalid date format encountered in replication data: $_"
                         }
                     }
                 }
@@ -1936,8 +2000,8 @@ try {
     $EnabledUsers = $Users | Where-Object {$_.Enabled -eq $true} | Select-Object Name, SamAccountName, LastLogonDate, PasswordLastSet
     $DisabledUsers = $Users | Where-Object {$_.Enabled -eq $false} | Select-Object Name, SamAccountName, LastLogonDate, PasswordLastSet
     $PasswordNeverExpiresUsers = $Users | Where-Object {$_.PasswordNeverExpires -eq $true} | Select-Object Name, SamAccountName, LastLogonDate, PasswordLastSet, Enabled
-    $InactiveUsers = $Users | Where-Object {$_.LastLogonDate -lt (Get-Date).AddDays(-90) -and $_.LastLogonDate -ne $null} | Select-Object Name, SamAccountName, LastLogonDate, Enabled
-    $LockedOutUsers = $Users | Where-Object {$_.AccountLockoutTime -ne $null} | Select-Object Name, SamAccountName, AccountLockoutTime, LastLogonDate
+    $InactiveUsers = $Users | Where-Object {$_.LastLogonDate -lt (Get-Date).AddDays(-90) -and $null -ne $_.LastLogonDate} | Select-Object Name, SamAccountName, LastLogonDate, Enabled
+    $LockedOutUsers = $Users | Where-Object {$null -ne $_.AccountLockoutTime} | Select-Object Name, SamAccountName, AccountLockoutTime, LastLogonDate
 
     $UserStats = @{
         TotalUsers = ($Users | Measure-Object).Count
@@ -1961,7 +2025,7 @@ try {
     # Categorize computers for detailed exports
     $EnabledComputers = $Computers | Where-Object {$_.Enabled -eq $true} | Select-Object Name, OperatingSystem, LastLogonDate
     $DisabledComputers = $Computers | Where-Object {$_.Enabled -eq $false} | Select-Object Name, OperatingSystem, LastLogonDate
-    $InactiveComputers = $Computers | Where-Object {$_.LastLogonDate -lt (Get-Date).AddDays(-90) -and $_.LastLogonDate -ne $null} | Select-Object Name, OperatingSystem, LastLogonDate
+    $InactiveComputers = $Computers | Where-Object {$_.LastLogonDate -lt (Get-Date).AddDays(-90) -and $null -ne $_.LastLogonDate} | Select-Object Name, OperatingSystem, LastLogonDate
     $WindowsServers = $Computers | Where-Object {$_.OperatingSystem -like "*Server*"} | Select-Object Name, OperatingSystem, LastLogonDate, Enabled
     $WindowsWorkstations = $Computers | Where-Object {$_.OperatingSystem -like "*Windows*" -and $_.OperatingSystem -notlike "*Server*"} | Select-Object Name, OperatingSystem, LastLogonDate, Enabled
 
@@ -2011,8 +2075,8 @@ try {
     $SchemaAdmins     = Get-ADGroupMember -Identity $SchemaAdminsSID -Recursive -ErrorAction SilentlyContinue
 
     # Check high number of Domain Admins
-    if ($DomainAdmins.Count -gt 5) {
-        $SecurityFindings += "High number of Domain Admins ($($DomainAdmins.Count))"
+    if ((Get-SafeCount $DomainAdmins) -gt 5) {
+        $SecurityFindings += "High number of Domain Admins ($(Get-SafeCount $DomainAdmins))"
     }
 
     # Check for weak password policy
@@ -2024,7 +2088,7 @@ try {
     # Check Password Settings Objects (PSOs) / Fine-Grained Password Policies
     $PSOs = Get-ADFineGrainedPasswordPolicy -Filter * -ErrorAction SilentlyContinue
     if ($PSOs) {
-        $SecurityFindings += "Found $($PSOs.Count) Password Settings Objects (Fine-Grained Password Policies)"
+        $SecurityFindings += "Found $(Get-SafeCount $PSOs) Password Settings Objects (Fine-Grained Password Policies)"
         foreach ($PSO in $PSOs) {
             if ($PSO.MinPasswordLength -lt 8) {
                 $SecurityFindings += "Weak minimum password length in PSO '$($PSO.Name)': $($PSO.MinPasswordLength)"
@@ -2102,14 +2166,14 @@ try {
 
     # Check for accounts with non-expiring passwords
     $NonExpiringPasswords = Get-ADUser -Filter {PasswordNeverExpires -eq $true -and Enabled -eq $true}
-    if ($NonExpiringPasswords.Count -gt 0) {
-        $SecurityFindings += "$($NonExpiringPasswords.Count) enabled accounts with non-expiring passwords"
+    if ((Get-SafeCount $NonExpiringPasswords) -gt 0) {
+        $SecurityFindings += "$(Get-SafeCount $NonExpiringPasswords) enabled accounts with non-expiring passwords"
     }
 
     # Check for accounts with Kerberos pre-authentication disabled
     $PreAuthDisabled = Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true}
-    if ($PreAuthDisabled.Count -gt 0) {
-        $SecurityFindings += "$($PreAuthDisabled.Count) accounts with Kerberos pre-authentication disabled"
+    if ((Get-SafeCount $PreAuthDisabled) -gt 0) {
+        $SecurityFindings += "$(Get-SafeCount $PreAuthDisabled) accounts with Kerberos pre-authentication disabled"
     }
 
     # Store results
@@ -2200,8 +2264,8 @@ try {
         $tlsClient = if (Test-Path $clientKey) { Get-ItemProperty -Path $clientKey -ErrorAction SilentlyContinue } else { $null }
         $tlsServer = if (Test-Path $serverKey) { Get-ItemProperty -Path $serverKey -ErrorAction SilentlyContinue } else { $null }
 
-        $ProtocolAudit["$tls Enabled (Client)"] = if ($tlsClient.Enabled -eq 1) { "Yes" } else { "No" }
-        $ProtocolAudit["$tls Enabled (Server)"] = if ($tlsServer.Enabled -eq 1) { "Yes" } else { "No" }
+        $ProtocolAudit["$tls Enabled (Client)"] = if ($tlsClient -and $tlsClient.PSObject.Properties["Enabled"] -and $tlsClient.Enabled -eq 1) { "Yes" } else { "No" }
+        $ProtocolAudit["$tls Enabled (Server)"] = if ($tlsServer -and $tlsServer.PSObject.Properties["Enabled"] -and $tlsServer.Enabled -eq 1) { "Yes" } else { "No" }
     }
 
     # --- SMBv1 Check ---
@@ -2224,7 +2288,7 @@ try {
     $ProtocolAudit["LLMNR"] = $llmnrStatus
 
     # --- NetBIOS Check ---
-    $netAdapters = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+    $netAdapters = Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
     $netbiosStatuses = $netAdapters | ForEach-Object {
         switch ($_.TcpipNetbiosOptions) {
             0 { "Default" }
@@ -2337,7 +2401,16 @@ try {
         "5141" = "Directory Service Object Deleted"
     }
     
-    foreach ($DC in $DCs[0..2]) { # Check first 3 DCs to avoid timeout
+    # Ensure DCs array is available and not empty
+    if (-not $DCs -or $DCs.Count -eq 0) {
+        Write-Warning "No domain controllers found for event log analysis"
+        $DCs = @(Get-ADDomainController -Filter * -ErrorAction SilentlyContinue)
+    }
+
+    # Check first 3 DCs or all available DCs if fewer than 3
+    $DCsToCheck = if ($DCs.Count -ge 3) { $DCs[0..2] } else { $DCs }
+
+    foreach ($DC in $DCsToCheck) {
         Write-Host "  Analyzing critical events on $($DC.DomainController)..." -ForegroundColor Yellow
         
         foreach ($EventID in $CriticalEventsToCheck.Keys) {
@@ -2412,7 +2485,7 @@ try {
                         EventID = $EventID
                         EventType = $CriticalEventsToCheck[$EventID]
                         Count = $Events.Count
-                        LastOccurrence = $Events[0].TimeCreated
+                        LastOccurrence = if ($Events.Count -gt 0) { $Events[0].TimeCreated } else { "N/A" }
                         Severity = $Severity
                         Category = $Category
                         RecentEvents = $RecentEvents
@@ -2481,10 +2554,14 @@ try {
                                         $MaxDepth = [Math]::Max($MaxDepth, 3)
                                         break
                                     }
-                                } catch { }
+                                } catch {
+                                    Write-Verbose "Failed to get sub-sub-nested group members: $_"
+                                }
                             }
                         }
-                    } catch { }
+                    } catch {
+                        Write-Verbose "Failed to get sub-nested group members: $_"
+                    }
                 }
                 $GroupInfo.NestingDepth = $MaxDepth
             } else {
@@ -2589,7 +2666,7 @@ Write-Host "Checking Group Managed Service Accounts usage..." -ForegroundColor C
 try {
     $gMSAAccounts = Get-ADServiceAccount -Filter {ObjectClass -eq "msDS-GroupManagedServiceAccount"} -Properties Enabled, PrincipalsAllowedToRetrieveManagedPassword
 
-    if ($gMSAAccounts.Count -eq 0) {
+    if ((Get-SafeCount $gMSAAccounts) -eq 0) {
         $AuditResults.gMSA = @{
             Status = "No gMSA accounts found"
             Recommendation = "Consider implementing Group Managed Service Accounts (gMSA) for better security, automated password management, and Kerberos authentication."
@@ -3047,7 +3124,7 @@ try {
                 # Check System State backup (from event logs)
                 try {
                     $BackupEvents = Get-WinEvent -ComputerName $DC.HostName -FilterHashtable @{LogName='Application'; ID=2001; StartTime=(Get-Date).AddDays(-30)} -MaxEvents 1 -ErrorAction SilentlyContinue
-                    if ($BackupEvents) {
+                    if ($BackupEvents -and $BackupEvents.Count -gt 0) {
                         $DatabaseCheck.LastBackup = $BackupEvents[0].TimeCreated
                     } else {
                         $DatabaseCheck.LastBackup = "No recent backup events found (last 30 days)"
@@ -3139,14 +3216,15 @@ try {
     $BaseSchemaDate = Get-Date "2000-01-01"  # Classes created after this are likely custom
     foreach ($Class in $AllClasses) {
         if ($Class.whenCreated -gt $BaseSchemaDate -and $Class.cn -notmatch "^ms-|^Microsoft|^Exchange|^System") {
-            $SchemaAnalysis.CustomClasses += @{
-                Name = $Class.cn
+            $ClassInfo = @{
+                Name = [string]$Class.cn
                 Created = $Class.whenCreated
-                Description = $Class.adminDescription
+                Description = if ($Class.adminDescription) { [string]$Class.adminDescription } else { "No description" }
             }
+            $SchemaAnalysis.CustomClasses = $SchemaAnalysis.CustomClasses + $ClassInfo
         }
     }
-    $SchemaAnalysis.SchemaStatistics.CustomClasses = $SchemaAnalysis.CustomClasses.Count
+    $SchemaAnalysis.SchemaStatistics.CustomClasses = Get-SafeCount $SchemaAnalysis.CustomClasses
     
     # Analyze attributes
     Write-Host "  Analyzing attributes..." -ForegroundColor Yellow
@@ -3156,16 +3234,17 @@ try {
     # Identify custom attributes
     foreach ($Attribute in $AllAttributes) {
         if ($Attribute.whenCreated -gt $BaseSchemaDate -and $Attribute.cn -notmatch "^ms-|^Microsoft|^Exchange|^System") {
-            $SchemaAnalysis.CustomAttributes += @{
-                Name = $Attribute.cn
+            $AttributeInfo = @{
+                Name = [string]$Attribute.cn
                 Created = $Attribute.whenCreated
-                Description = $Attribute.adminDescription
-                Syntax = $Attribute.attributeSyntax
-                SingleValued = $Attribute.isSingleValued
+                Description = if ($Attribute.adminDescription) { [string]$Attribute.adminDescription } else { "No description" }
+                Syntax = if ($Attribute.attributeSyntax) { [string]$Attribute.attributeSyntax } else { "Unknown" }
+                SingleValued = if ($null -ne $Attribute.isSingleValued) { [bool]$Attribute.isSingleValued } else { $false }
             }
+            $SchemaAnalysis.CustomAttributes = $SchemaAnalysis.CustomAttributes + $AttributeInfo
         }
     }
-    $SchemaAnalysis.SchemaStatistics.CustomAttributes = $SchemaAnalysis.CustomAttributes.Count
+    $SchemaAnalysis.SchemaStatistics.CustomAttributes = Get-SafeCount $SchemaAnalysis.CustomAttributes
     
     # Check for common schema extensions
     Write-Host "  Checking for schema extensions..." -ForegroundColor Yellow
@@ -3180,39 +3259,45 @@ try {
         $ExtensionCount = 0
         foreach ($Pattern in $Extension.Value) {
             if ($Pattern -like "*-*") {
-                $ExtensionCount += ($AllAttributes | Where-Object {$_.cn -like $Pattern}).Count
-                $ExtensionCount += ($AllClasses | Where-Object {$_.cn -like $Pattern}).Count
+                $AttributeMatches = ($AllAttributes | Where-Object {$_.cn -like $Pattern}).Count
+                $ClassMatches = ($AllClasses | Where-Object {$_.cn -like $Pattern}).Count
+                $ExtensionCount = $ExtensionCount + $AttributeMatches + $ClassMatches
             } else {
-                $ExtensionCount += ($AllAttributes | Where-Object {$_.cn -eq $Pattern}).Count
+                $AttributeMatches = ($AllAttributes | Where-Object {$_.cn -eq $Pattern}).Count
+                $ExtensionCount = $ExtensionCount + $AttributeMatches
             }
         }
         
         if ($ExtensionCount -gt 0) {
-            $SchemaAnalysis.SchemaExtensions += @{
-                ExtensionType = $Extension.Key
-                ObjectCount = $ExtensionCount
+            $ExtensionInfo = @{
+                ExtensionType = [string]$Extension.Key
+                ObjectCount = [int]$ExtensionCount
             }
+            $SchemaAnalysis.SchemaExtensions = $SchemaAnalysis.SchemaExtensions + $ExtensionInfo
         }
     }
     
     # Generate recommendations
-    if ($SchemaAnalysis.CustomClasses.Count -gt 50) {
-        $SchemaAnalysis.Recommendations += "High number of custom classes ($($SchemaAnalysis.CustomClasses.Count)). Review if all are still needed."
+    $CustomClassesCount = Get-SafeCount $SchemaAnalysis.CustomClasses
+    if ($CustomClassesCount -gt 50) {
+        $SchemaAnalysis.Recommendations = $SchemaAnalysis.Recommendations + @("High number of custom classes ($CustomClassesCount). Review if all are still needed.")
     }
-    
-    if ($SchemaAnalysis.CustomAttributes.Count -gt 100) {
-        $SchemaAnalysis.Recommendations += "High number of custom attributes ($($SchemaAnalysis.CustomAttributes.Count)). Review if all are still in use."
+
+    $CustomAttributesCount = Get-SafeCount $SchemaAnalysis.CustomAttributes
+    if ($CustomAttributesCount -gt 100) {
+        $SchemaAnalysis.Recommendations = $SchemaAnalysis.Recommendations + @("High number of custom attributes ($CustomAttributesCount). Review if all are still in use.")
     }
-    
-    if ($SchemaAnalysis.SchemaExtensions.Count -eq 0) {
-        $SchemaAnalysis.Recommendations += "No major schema extensions detected. Schema appears to be standard Active Directory."
+
+    $SchemaExtensionsCount = Get-SafeCount $SchemaAnalysis.SchemaExtensions
+    if ($SchemaExtensionsCount -eq 0) {
+        $SchemaAnalysis.Recommendations = $SchemaAnalysis.Recommendations + @("No major schema extensions detected. Schema appears to be standard Active Directory.")
     }
-    
+
     # Check schema version for upgrade readiness
     if ($SchemaAnalysis.SchemaVersion -match "^\d+$") {
         $VersionNumber = [int]$SchemaAnalysis.SchemaVersion
         if ($VersionNumber -lt 87) {
-            $SchemaAnalysis.Recommendations += "Schema version $VersionNumber indicates older Active Directory. Consider evaluating upgrade path."
+            $SchemaAnalysis.Recommendations = $SchemaAnalysis.Recommendations + @("Schema version $VersionNumber indicates older Active Directory. Consider evaluating upgrade path.")
         }
     }
     
@@ -3468,6 +3553,15 @@ $AuditResults.ObjectProtection = $ObjectProtectionAnalysis
 #endregion
 
 # Use configuration from web interface for Azure AD Connect, Conditional Access, and PKI Infrastructure checks
+# If Config is not defined (command-line mode), set default values
+if (-not $Config) {
+    $Config = @{
+        AzureAdConnect = $true     # Default: include Azure AD Connect
+        ConditionalAccess = $true  # Default: include Conditional Access
+        PkiInfra = $true          # Default: include PKI Infrastructure
+    }
+}
+
 $CheckAzureADConnect = if ($Config.AzureAdConnect) { 'y' } else { 'n' }
 $CheckConditionalAccess = if ($Config.ConditionalAccess) { 'y' } else { 'n' }
 $CheckPkiInfra = if ($Config.PkiInfra) { 'y' } else { 'n' }
@@ -3529,11 +3623,11 @@ if ($CheckAzureADConnect -eq 'y') {
             # Check event logs for sync errors
             try {
                 $SyncErrors = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Directory Synchronization'; Level=2,3; StartTime=(Get-Date).AddDays(-7)} -MaxEvents 10 -ErrorAction SilentlyContinue
-                foreach ($Error in $SyncErrors) {
+                foreach ($SyncError in $SyncErrors) {
                     $AADConnectHealth.SyncErrors += @{
-                        TimeCreated = $Error.TimeCreated
-                        LevelDisplayName = $Error.LevelDisplayName
-                        Message = $Error.Message.Substring(0, [Math]::Min(200, $Error.Message.Length)) + "..."
+                        TimeCreated = $SyncError.TimeCreated
+                        LevelDisplayName = $SyncError.LevelDisplayName
+                        Message = $SyncError.Message.Substring(0, [Math]::Min(200, $SyncError.Message.Length)) + "..."
                     }
                 }
             } catch {
@@ -3850,36 +3944,39 @@ $HTMLReport = @"
             color: #4b5563;
         }
         
-        /* Alert boxes - softer colors and better contrast */
-        .warning { 
-            background: #fef3c7; 
-            border: 1px solid #f59e0b; 
-            color: #92400e;
-            padding: 20px 24px; 
-            border-radius: 8px; 
+        /* Alert boxes - modern vibrant colors with better visual appeal */
+        .warning {
+            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
+            border: 1px solid #ffab00;
+            color: #e65100;
+            padding: 20px 24px;
+            border-radius: 12px;
             margin: 24px 0;
-            border-left: 4px solid #f59e0b;
+            border-left: 5px solid #ff8f00;
             font-size: 0.875rem;
+            box-shadow: 0 4px 12px rgba(255, 193, 7, 0.15);
         }
-        .error { 
-            background: #fee2e2; 
-            border: 1px solid #ef4444; 
-            color: #991b1b;
-            padding: 20px 24px; 
-            border-radius: 8px; 
+        .error {
+            background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+            border: 1px solid #f44336;
+            color: #c62828;
+            padding: 20px 24px;
+            border-radius: 12px;
             margin: 24px 0;
-            border-left: 4px solid #ef4444;
+            border-left: 5px solid #d32f2f;
             font-size: 0.875rem;
+            box-shadow: 0 4px 12px rgba(244, 67, 54, 0.15);
         }
-        .success { 
-            background: #dcfce7; 
-            border: 1px solid #22c55e; 
-            color: #166534;
-            padding: 20px 24px; 
-            border-radius: 8px; 
+        .success {
+            background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+            border: 1px solid #4caf50;
+            color: #2e7d32;
+            padding: 20px 24px;
+            border-radius: 12px;
             margin: 24px 0;
-            border-left: 4px solid #22c55e;
+            border-left: 5px solid #388e3c;
             font-size: 0.875rem;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.15);
         }
         
         table { width: 100%; border-collapse: collapse; margin: 15px 0; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
@@ -3887,20 +3984,20 @@ $HTMLReport = @"
         th { background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); color: white; font-weight: 500; }
         tr:nth-child(even) { background-color: rgba(52,152,219,0.05); }
         
-        /* Status-specific row styling */
-        .table .table-success {
-            background-color: #d4edda !important;
-            color: #155724;
+        /* Status-specific row styling with modern colors */
+        .table .table-success, tr.success {
+            background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%) !important;
+            color: #2e7d32 !important;
         }
-        
-        .table .table-warning {
-            background-color: #fff3cd !important;
-            color: #856404;
+
+        .table .table-warning, tr.warning {
+            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%) !important;
+            color: #e65100 !important;
         }
-        
-        .table .table-danger {
-            background-color: #f8d7da !important;
-            color: #721c24;
+
+        .table .table-danger, tr.error {
+            background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%) !important;
+            color: #c62828 !important;
         }
         
         .table .table-info {
@@ -3928,17 +4025,20 @@ $HTMLReport = @"
         
         .badge-success {
             color: #fff;
-            background-color: #28a745;
+            background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+            box-shadow: 0 2px 4px rgba(76, 175, 80, 0.2);
         }
-        
+
         .badge-warning {
-            color: #212529;
-            background-color: #ffc107;
+            color: #fff;
+            background: linear-gradient(135deg, #ffab00 0%, #ff8f00 100%);
+            box-shadow: 0 2px 4px rgba(255, 171, 0, 0.2);
         }
-        
+
         .badge-danger {
             color: #fff;
-            background-color: #dc3545;
+            background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+            box-shadow: 0 2px 4px rgba(244, 67, 54, 0.2);
         }
         
         .badge-info {
@@ -3988,26 +4088,30 @@ $HTMLReport = @"
         }
         
         /* Export button styling */
-        .export-btn { 
-            position: absolute; 
-            top: 8px; 
-            right: 8px; 
-            background: #3b82f6; 
-            color: white; 
-            border: none; 
-            border-radius: 6px; 
-            width: 28px; 
-            height: 28px; 
-            font-size: 12px; 
-            cursor: pointer; 
-            opacity: 0.7; 
-            transition: all 0.2s ease;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        .export-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #059669;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            width: 32px;
+            height: 32px;
+            font-size: 14px;
+            cursor: pointer;
+            opacity: 0.8;
+            transition: all 0.3s ease;
+            box-shadow: 0 3px 6px rgba(5, 150, 105, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        .export-btn:hover { 
-            background: #2563eb; 
+        .export-btn:hover {
+            background: #047857;
             opacity: 1;
-            transform: scale(1.1);
+            transform: scale(1.15) rotate(5deg);
+            box-shadow: 0 4px 8px rgba(5, 150, 105, 0.3);
         }
         
         /* Tree and toggle styling */
@@ -4154,19 +4258,25 @@ $HTMLReport = @"
             border-radius: 8px; 
             font-weight: 500; 
         }
-        .status-indicator.success { 
-            background: #dcfce7; 
-            border: 1px solid #22c55e; 
-            color: #166534; 
+        .status-indicator.success {
+            background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+            border: 1px solid #4caf50;
+            color: #2e7d32;
         }
-        .status-indicator.warning { 
-            background: #fef3c7; 
-            border: 1px solid #f59e0b; 
-            color: #92400e; 
+        .status-indicator.warning {
+            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
+            border: 1px solid #ffab00;
+            color: #e65100;
+        }
+        .status-indicator.error {
+            background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+            border: 1px solid #f44336;
+            color: #c62828;
         }
         .status-indicator .status-icon { margin-right: 8px; font-size: 16px; }
-        .status.success { color: #059669; font-weight: 600; }
-        .status.warning { color: #d97706; font-weight: 600; }
+        .status.success { color: #4caf50; font-weight: 600; }
+        .status.warning { color: #ff8f00; font-weight: 600; }
+        .status.error { color: #f44336; font-weight: 600; }
         
         .info-grid { margin: 12px 0; }
         .info-grid p { margin: 6px 0; }
@@ -4417,6 +4527,14 @@ $(if ($AuditResults.AccountsAnalysis.Computers.AllComputersList) {
 
 
     <!-- ============================================ -->
+    <!-- 📊 EXECUTIVE SUMMARY -->
+    <!-- ============================================ -->
+    <div class="section executive-summary">
+        <h2>📊 Executive Summary</h2>
+        <p>High-level overview of Active Directory health and critical findings requiring immediate attention.</p>
+    </div>
+
+    <!-- ============================================ -->
     <!-- 🏗️ SECTION 1: INFRASTRUCTURE & FOUNDATION -->
     <!-- ============================================ -->
 
@@ -4627,7 +4745,13 @@ if ($AuditResults.ReplicationHealth -is [array] -and $AuditResults.ReplicationHe
     $HTMLReport += "<div class='warning'>Replication issues detected:</div>"
     $HTMLReport += "<table><thead><tr><th>Source DC</th><th>Destination DC</th><th>Naming Context</th><th>Failures</th><th>Last Success</th></tr></thead><tbody>"
     foreach ($Repl in $AuditResults.ReplicationHealth) {
-        $HTMLReport += "<tr><td>$($Repl.SourceDC)</td><td>$($Repl.DestinationDC)</td><td>$($Repl.NamingContext)</td><td>$($Repl.Failures)</td><td>$($Repl.LastSuccess)</td></tr>"
+        $SourceDC = Get-SafeProperty $Repl "SourceDC"
+        $DestinationDC = Get-SafeProperty $Repl "DestinationDC"
+        $NamingContext = Get-SafeProperty $Repl "NamingContext"
+        $Failures = Get-SafeProperty $Repl "Failures" "0"
+        $LastSuccess = Get-SafeProperty $Repl "LastSuccess"
+
+        $HTMLReport += "<tr><td>$SourceDC</td><td>$DestinationDC</td><td>$NamingContext</td><td>$Failures</td><td>$LastSuccess</td></tr>"
     }
     $HTMLReport += "</tbody></table>"
 } else {
@@ -5073,70 +5197,153 @@ if ($AuditResults.AccountsAnalysis.Users -is [hashtable]) {
     $HTMLReport += @"
         <h3>👥 User Account Statistics</h3>
         <div class="metric">
-            <button class="export-btn" onclick="exportTotalUsers()" title="Export All Users">📥</button>
+            <button class="export-btn" onclick="exportTotalUsers()" title="Export All Users">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Users.TotalUsers)</div>
             <div class="label">Total Users</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportEnabledUsers()" title="Export Enabled Users">📥</button>
+            <button class="export-btn" onclick="exportEnabledUsers()" title="Export Enabled Users">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Users.EnabledUsers)</div>
             <div class="label">Enabled</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportDisabledUsers()" title="Export Disabled Users">📥</button>
+            <button class="export-btn" onclick="exportDisabledUsers()" title="Export Disabled Users">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Users.DisabledUsers)</div>
             <div class="label">Disabled</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportPasswordNeverExpiresUsers()" title="Export Users with Non-Expiring Passwords">📥</button>
+            <button class="export-btn" onclick="exportPasswordNeverExpiresUsers()" title="Export Users with Non-Expiring Passwords">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Users.PasswordNeverExpires)</div>
             <div class="label">Never Expires</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportInactiveUsers()" title="Export Inactive Users">📥</button>
+            <button class="export-btn" onclick="exportInactiveUsers()" title="Export Inactive Users">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Users.InactiveUsers90Days)</div>
             <div class="label">Inactive 90d</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportLockedOutUsers()" title="Export Locked Out Users">📥</button>
+            <button class="export-btn" onclick="exportLockedOutUsers()" title="Export Locked Out Users">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Users.LockedOutUsers)</div>
             <div class="label">Locked Out</div>
         </div>
         
         <h3>💻 Computer Account Statistics</h3>
         <div class="metric">
-            <button class="export-btn" onclick="exportTotalComputers()" title="Export All Computers">📥</button>
+            <button class="export-btn" onclick="exportTotalComputers()" title="Export All Computers">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Computers.TotalComputers)</div>
             <div class="label">Total Computers</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportEnabledComputers()" title="Export Enabled Computers">📥</button>
+            <button class="export-btn" onclick="exportEnabledComputers()" title="Export Enabled Computers">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Computers.EnabledComputers)</div>
             <div class="label">Enabled</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportDisabledComputers()" title="Export Disabled Computers">📥</button>
+            <button class="export-btn" onclick="exportDisabledComputers()" title="Export Disabled Computers">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Computers.DisabledComputers)</div>
             <div class="label">Disabled</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportWindowsServers()" title="Export Windows Servers">📥</button>
+            <button class="export-btn" onclick="exportWindowsServers()" title="Export Windows Servers">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Computers.WindowsServers)</div>
             <div class="label">Servers</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportWindowsWorkstations()" title="Export Windows Workstations">📥</button>
+            <button class="export-btn" onclick="exportWindowsWorkstations()" title="Export Windows Workstations">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Computers.WindowsWorkstations)</div>
             <div class="label">Workstations</div>
         </div>
         <div class="metric">
-            <button class="export-btn" onclick="exportInactiveComputers()" title="Export Inactive Computers">📥</button>
+            <button class="export-btn" onclick="exportInactiveComputers()" title="Export Inactive Computers">💾</button>
             <div class="number">$($AuditResults.AccountsAnalysis.Computers.InactiveComputers90Days)</div>
             <div class="label">Inactive 90d</div>
         </div>
 "@
 } else {
     $HTMLReport += "<div class='error'>$($AuditResults.AccountsAnalysis)</div>"
+}
+
+$HTMLReport += @"
+    </div>
+
+    <div class="section">
+        <h2>🏗️ OU Hierarchy Mapping</h2>
+"@
+
+if ($AuditResults.OUHierarchy -is [array]) {
+    # Build interactive tree structure
+    $HTMLReport += "<div class='ou-tree' id='ou-tree'>"
+
+    function Build-OUTreeHTML($OUs, $ParentDN = "") {
+        $ChildOUs = $OUs | Where-Object {
+            if ($ParentDN -eq "") {
+                # Root level OUs (only one level deep from domain)
+                ($_.DistinguishedName -split ',').Count -eq 3  # OU=name,DC=domain,DC=com
+            } else {
+                $_.DistinguishedName -like "*,$ParentDN" -and
+                ($_.DistinguishedName -replace ",?$([regex]::Escape($ParentDN))$", "") -notmatch ","
+            }
+        } | Sort-Object Name
+
+        $result = ""
+        foreach ($OU in $ChildOUs) {
+            $HasChildren = $OUs | Where-Object { $_.DistinguishedName -like "*,$($OU.DistinguishedName)" -and $_.DistinguishedName -ne $OU.DistinguishedName }
+            $ExpandIcon = if ($HasChildren) { "📁" } else { "📄" }
+
+            $result += "<div class='ou-item'>"
+            $result += "<div class='ou-header' onclick='toggleOU(this)'>"
+            $result += "<span class='ou-icon'>$ExpandIcon</span>"
+            $result += "<span class='ou-name'>$($OU.Name)</span>"
+            $result += "<span class='ou-stats'>U:$($OU.Users) C:$($OU.Computers) G:$($OU.Groups)</span>"
+            $result += "</div>"
+
+            if ($HasChildren) {
+                $result += "<div class='ou-children' style='display:none;'>"
+                $result += Build-OUTreeHTML $OUs $OU.DistinguishedName
+                $result += "</div>"
+            }
+            $result += "</div>"
+        }
+        return $result
+    }
+
+    $HTMLReport += Build-OUTreeHTML $AuditResults.OUHierarchy
+    $HTMLReport += "</div>"
+
+    # Add OU Statistics Table
+    $HTMLReport += "<h3>OU Statistics Summary</h3>"
+    $HTMLReport += "<table><thead><tr><th>OU Name</th><th>Users</th><th>Computers</th><th>Groups</th><th>Child OUs</th><th>Full Path</th></tr></thead><tbody>"
+    foreach ($OU in $AuditResults.OUHierarchy | Sort-Object Name) {
+        $HTMLReport += "<tr>"
+        $HTMLReport += "<td><strong>$($OU.Name)</strong></td>"
+        $HTMLReport += "<td>$($OU.Users)</td>"
+        $HTMLReport += "<td>$($OU.Computers)</td>"
+        $HTMLReport += "<td>$($OU.Groups)</td>"
+        $HTMLReport += "<td>$($OU.ChildOUs)</td>"
+        $HTMLReport += "<td style='font-size: 0.85em; color: #666;'>$($OU.DistinguishedName)</td>"
+        $HTMLReport += "</tr>"
+    }
+    $HTMLReport += "</tbody></table>"
+
+    # JavaScript for OU tree interaction
+    $HTMLReport += @"
+    <script>
+    function toggleOU(header) {
+        const children = header.nextElementSibling;
+        if (children && children.classList.contains('ou-children')) {
+            if (children.style.display === 'none') {
+                children.style.display = 'block';
+                header.querySelector('.ou-icon').textContent = '📂';
+            } else {
+                children.style.display = 'none';
+                header.querySelector('.ou-icon').textContent = '📁';
+            }
+        }
+    }
+    </script>
+"@
+} else {
+    $HTMLReport += "<div class='error'>$($AuditResults.OUHierarchy)</div>"
 }
 
 $HTMLReport += @"
@@ -5152,7 +5359,7 @@ $HTMLReport += @"
 "@
 
 if ($AuditResults.SecurityFindings -is [array]) {
-    if ($AuditResults.SecurityFindings.Count -gt 0) {
+    if ((Get-SafeCount $AuditResults.SecurityFindings) -gt 0) {
         $HTMLReport += "<div class='warning'><strong>Security Findings:</strong><ul>"
         foreach ($Finding in $AuditResults.SecurityFindings) {
             $HTMLReport += "<li>$Finding</li>"
@@ -5276,15 +5483,10 @@ $HTMLReport += @"
     </div>
 
     <div class="section">
-        <h2>🏗️ OU Hierarchy Mapping</h2>
+        <h2>🔍 Critical Security Events Analysis</h2>
 "@
 
-if ($AuditResults.OUHierarchy -is [array]) {
-    # Build interactive tree structure
-    $HTMLReport += "<div class='ou-tree' id='ou-tree'>"
-    
-    # Group OUs by parent to build hierarchy
-    $OUGroups = $AuditResults.OUHierarchy | Group-Object ParentDN
+if ($AuditResults.EventLogAnalysis -is [array] -and $AuditResults.EventLogAnalysis.Count -gt 0) {
     $RootOUs = $AuditResults.OUHierarchy | Where-Object {$_.Level -eq 1}
     
     # Function to build tree recursively (simplified for PowerShell)
@@ -6165,8 +6367,9 @@ $HTMLReport += @"
     </div>
 "@
 
-# Add Cloud Integration section
-$HTMLReport += @"
+# Add Cloud Integration section header only if any cloud features are configured
+if ($Config.AzureAdConnect -or $Config.ConditionalAccess -or $Config.PkiInfra) {
+    $HTMLReport += @"
 
     <!-- ============================================ -->
     <!-- ☁️ SECTION 5: CLOUD INTEGRATION -->
@@ -6177,9 +6380,10 @@ $HTMLReport += @"
         <p>Azure AD Connect, Conditional Access policies, and hybrid identity management.</p>
     </div>
 "@
+}
 
-# Add Azure AD Connect section if data exists
-if ($AuditResults.AzureADConnectHealth) {
+# Add Azure AD Connect section if configured and data exists
+if ($Config.AzureAdConnect -and $AuditResults.AzureADConnectHealth) {
     $HTMLReport += @"
     <div class="section">
         <h2>☁️ Azure AD Connect Health</h2>
@@ -6223,8 +6427,8 @@ if ($AuditResults.AzureADConnectHealth) {
 "@
 }
 
-# Add Conditional Access section if data exists
-if ($AuditResults.ConditionalAccessPolicies) {
+# Add Conditional Access section if configured and data exists
+if ($Config.ConditionalAccess -and $AuditResults.ConditionalAccessPolicies) {
     $HTMLReport += @"
     <div class="section">
         <h2>🔐 Conditional Access Policies</h2>
@@ -6253,7 +6457,7 @@ if ($AuditResults.ConditionalAccessPolicies) {
 }
 
 # Add PKI Infrastructure section if data exists
-if ($AuditResults.PkiInfrastructure) {
+if ($Config.PkiInfra -and $AuditResults.PkiInfrastructure) {
     $HTMLReport += @"
     <div class="section">
         <h2>🔐 PKI Infrastructure Analysis</h2>
@@ -6399,8 +6603,8 @@ if ($AuditResults.ReplicationHealth -is [array] -and $AuditResults.ReplicationHe
     $Recommendations += "Warning: Active Directory replication issues detected"
 }
 
-if ($AuditResults.SecurityFindings -is [array] -and $AuditResults.SecurityFindings.Count -gt 0) {
-    $Recommendations += "Security: $($AuditResults.SecurityFindings.Count) security findings require attention"
+if ($AuditResults.SecurityFindings -is [array] -and (Get-SafeCount $AuditResults.SecurityFindings) -gt 0) {
+    $Recommendations += "Security: $(Get-SafeCount $AuditResults.SecurityFindings) security findings require attention"
 }
 
 if ($AuditResults.AccountsAnalysis.Users.PasswordNeverExpires -gt 0) {
@@ -6443,21 +6647,22 @@ if ($AuditResults.ObjectProtection.Recommendations) {
     }
 }
 
-# Add Azure AD Connect recommendations
-if ($AuditResults.AzureADConnectHealth.Recommendations) {
+# Add Azure AD Connect recommendations (only if configured)
+if ($Config.AzureAdConnect -and $AuditResults.AzureADConnectHealth.Recommendations) {
     foreach ($Recommendation in $AuditResults.AzureADConnectHealth.Recommendations) {
         $Recommendations += "Azure AD Connect: $Recommendation"
     }
 }
 
-# Add Conditional Access recommendations
-if ($AuditResults.ConditionalAccessPolicies.Recommendations) {
+# Add Conditional Access recommendations (only if configured)
+if ($Config.ConditionalAccess -and $AuditResults.ConditionalAccessPolicies.Recommendations) {
     foreach ($Recommendation in $AuditResults.ConditionalAccessPolicies.Recommendations) {
         $Recommendations += "Conditional Access: $Recommendation"
     }
 }
 
-if ($AuditResults.PkiInfrastructure.Recommendations) {
+# Add PKI Infrastructure recommendations (only if configured)
+if ($Config.PkiInfra -and $AuditResults.PkiInfrastructure.Recommendations) {
     foreach ($Recommendation in $AuditResults.PkiInfrastructure.Recommendations) {
         $Recommendations += "PKI Infrastructure: $Recommendation"
     }
@@ -6511,7 +6716,7 @@ $CriticalFindings = @()
 $Recommendations = @()
 
 # Collect critical findings from various audit results
-if ($AuditResults.SecurityFindings -and $AuditResults.SecurityFindings.Count -gt 0) {
+if ($AuditResults.SecurityFindings -and (Get-SafeCount $AuditResults.SecurityFindings) -gt 0) {
     foreach ($Finding in $AuditResults.SecurityFindings) {
         if ($Finding -like "*Domain Admins*" -or $Finding -like "*password*" -or $Finding -like "*KRBTGT*") {
             $CriticalFindings += $Finding
