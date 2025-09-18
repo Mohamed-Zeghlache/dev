@@ -1235,115 +1235,6 @@ try {
 #endregion
 
 
-#region DC Performance Metrics
-Write-Host "Collecting DC Performance Metrics..." -ForegroundColor Cyan
-try {
-    $DCPerformanceMetrics = @()
-    $AllDomains = (Get-ADForest).Domains
-
-    foreach ($Domain in $AllDomains) {
-        $DomainControllers = Get-ADDomainController -Filter * -Server $Domain
-
-        foreach ($DC in $DomainControllers) {
-            Write-Host "  Collecting metrics for $($DC.HostName)..." -ForegroundColor Yellow
-
-            $DCMetrics = @{
-                DomainController = $DC.HostName
-                Domain = $Domain
-                CollectionTime = Get-Date
-                CPUUsage = "N/A"
-                MemoryUsage = "N/A"
-                DiskUsage = @()
-                ADDatabaseSize = "N/A"
-                LogFileSize = "N/A"
-                NTDSPerformance = @()
-                LDAPConnections = "N/A"
-            }
-
-            try {
-                # CPU Usage
-                $CPUUsage = Get-CimInstance -ClassName Win32_Processor -ComputerName $DC.HostName -ErrorAction SilentlyContinue |
-                    Measure-Object -Property LoadPercentage -Average
-                $DCMetrics.CPUUsage = "$([math]::Round($CPUUsage.Average, 2))%"
-
-                # Memory Usage
-                $OS = Get-CimInstance -ClassName Win32_OperatingSystem -ComputerName $DC.HostName -ErrorAction SilentlyContinue
-                if ($OS) {
-                    $MemoryUsedPercent = [math]::Round(((($OS.TotalVisibleMemorySize - $OS.FreePhysicalMemory) / $OS.TotalVisibleMemorySize) * 100), 2)
-                    $DCMetrics.MemoryUsage = "$MemoryUsedPercent% ($([math]::Round(($OS.TotalVisibleMemorySize - $OS.FreePhysicalMemory) / 1MB, 2)) GB / $([math]::Round($OS.TotalVisibleMemorySize / 1MB, 2)) GB)"
-                }
-
-                # Disk Usage
-                $Disks = Get-CimInstance -ClassName Win32_LogicalDisk -ComputerName $DC.HostName -Filter "DriveType = 3" -ErrorAction SilentlyContinue
-                foreach ($Disk in $Disks) {
-                    $UsedPercent = [math]::Round((($Disk.Size - $Disk.FreeSpace) / $Disk.Size) * 100, 2)
-                    $DCMetrics.DiskUsage += @{
-                        Drive = $Disk.DeviceID
-                        SizeGB = [math]::Round($Disk.Size / 1GB, 2)
-                        FreeGB = [math]::Round($Disk.FreeSpace / 1GB, 2)
-                        UsedPercent = $UsedPercent
-                    }
-                }
-
-                # NTDS Database Size
-                $NTDSPath = "\\$($DC.HostName)\C$\Windows\NTDS\ntds.dit"
-                if (Test-Path $NTDSPath) {
-                    $DBSize = (Get-Item $NTDSPath -ErrorAction SilentlyContinue).Length
-                    $DCMetrics.ADDatabaseSize = "$([math]::Round($DBSize / 1GB, 2)) GB"
-                }
-
-                # NTDS Log Files Size
-                $LogPath = "\\$($DC.HostName)\C$\Windows\NTDS\"
-                if (Test-Path $LogPath) {
-                    $LogFiles = Get-ChildItem "$LogPath*.log" -ErrorAction SilentlyContinue
-                    $TotalLogSize = ($LogFiles | Measure-Object -Property Length -Sum).Sum
-                    $DCMetrics.LogFileSize = "$([math]::Round($TotalLogSize / 1MB, 2)) MB"
-                }
-
-                # Performance Counters (if accessible)
-                try {
-                    # LDAP Connections
-                    $LDAPConnections = (Get-Counter -ComputerName $DC.HostName -Counter "\NTDS\LDAP Client Sessions" -MaxSamples 1 -ErrorAction SilentlyContinue).CounterSamples.CookedValue
-                    $DCMetrics.LDAPConnections = [math]::Round($LDAPConnections, 0)
-
-                    $PerfCounters = @(
-                        "\NTDS\LDAP Successful Binds/sec",
-                        "\NTDS\LDAP Searches/sec",
-                        "\NTDS\DRA Inbound Values (DNs only)/sec"
-                    )
-
-                    foreach ($Counter in $PerfCounters) {
-                        try {
-                            $CounterValue = (Get-Counter -ComputerName $DC.HostName -Counter $Counter -MaxSamples 1 -ErrorAction SilentlyContinue).CounterSamples.CookedValue
-                            $DCMetrics.NTDSPerformance += @{
-                                Counter = $Counter.Split('\')[-1]
-                                Value = [math]::Round($CounterValue, 2)
-                            }
-                        } catch {
-                            # Counter not available
-                        }
-                    }
-                } catch {
-                    Write-Verbose "Performance counters not accessible for $($DC.HostName)"
-                }
-
-            } catch {
-                Write-Warning "Error collecting performance metrics for $($DC.HostName): $_"
-            }
-
-            $DCPerformanceMetrics += $DCMetrics
-        }
-    }
-
-} catch {
-    Write-Warning "Error during DC performance metrics collection: $_"
-    $DCPerformanceMetrics = @{ Error = $_.Exception.Message }
-}
-
-$AuditResults.DCPerformanceMetrics = $DCPerformanceMetrics
-#endregion
-
-
 #region Replication Health Assessment
 Write-Host "Assessing Replication Health..." -ForegroundColor Cyan
 try {
@@ -1467,7 +1358,7 @@ try {
                 $DNSEntry.ConnectivityStatus = "Online"
                 Write-Host "    ✓ $Hostname is reachable on port 53" -ForegroundColor Green
             } else {
-                $DNSEntry.ConnectivityStatus = "Port 53 blocked"
+                $DNSEntry.ConnectivityStatus = "Unreachable - Port 53 blocked"
                 Write-Warning "    ✗ $Hostname is not reachable on port 53 (DNS port blocked)"
             }
         } catch {
@@ -1975,258 +1866,47 @@ try {
 }
 #endregion
 
-#region Group Policy Assessment & Security Analysis
-Write-Host "Performing Comprehensive Group Policy Analysis..." -ForegroundColor Cyan
-
-# GPO Security Analysis Functions
-function Test-GPOSecuritySettings {
-    param([xml]$GPOReport, [string]$GPOName)
-
-    $SecurityIssues = @()
-    $SecurityRecommendations = @()
-
-    # Check password policy settings
-    if ($GPOReport.GPO.Computer.ExtensionData.Extension.PasswordPolicy) {
-        $PasswordPolicy = $GPOReport.GPO.Computer.ExtensionData.Extension.PasswordPolicy
-
-        if ([int]$PasswordPolicy.MinimumPasswordLength -lt 14) {
-            $SecurityIssues += "Weak password length requirement (< 14 characters)"
-            $SecurityRecommendations += "Set minimum password length to 14+ characters"
-        }
-
-        if ([int]$PasswordPolicy.MaximumPasswordAge -gt 365) {
-            $SecurityIssues += "Password expiration too long (> 365 days)"
-            $SecurityRecommendations += "Set maximum password age to 365 days or less"
-        }
-    }
-
-    # Check account lockout policy
-    if ($GPOReport.GPO.Computer.ExtensionData.Extension.AccountLockoutPolicy) {
-        $LockoutPolicy = $GPOReport.GPO.Computer.ExtensionData.Extension.AccountLockoutPolicy
-
-        if ([int]$LockoutPolicy.LockoutThreshold -gt 5 -or [int]$LockoutPolicy.LockoutThreshold -eq 0) {
-            $SecurityIssues += "Weak account lockout threshold"
-            $SecurityRecommendations += "Set account lockout threshold to 3-5 failed attempts"
-        }
-    }
-
-    # Check audit policy settings
-    $AuditCategories = @(
-        "AuditLogonEvents", "AuditAccountLogonEvents", "AuditPrivilegeUse",
-        "AuditPolicyChange", "AuditAccountManagement", "AuditObjectAccess"
-    )
-
-    foreach ($Category in $AuditCategories) {
-        $AuditSetting = $GPOReport.GPO.Computer.ExtensionData.Extension.AuditPolicy.$Category
-        if ($AuditSetting -and $AuditSetting -eq "No Auditing") {
-            $SecurityIssues += "Critical audit category '$Category' not enabled"
-            $SecurityRecommendations += "Enable auditing for $Category"
-        }
-    }
-
-    return @{
-        SecurityIssues = $SecurityIssues
-        SecurityRecommendations = $SecurityRecommendations
-    }
-}
-
-function Analyze-GPOCompliance {
-    param([xml]$GPOReport, [string]$GPOName)
-
-    $ComplianceScore = 100
-    $ComplianceIssues = @()
-
-    # Check for deprecated/legacy settings
-    if ($GPOReport.GPO.Computer.ExtensionData.Extension.SecurityOptions) {
-        $SecurityOptions = $GPOReport.GPO.Computer.ExtensionData.Extension.SecurityOptions
-
-        # Check for LM hash storage (should be disabled)
-        $LMHashSetting = $SecurityOptions | Where-Object { $_.KeyName -like "*LMCompatibilityLevel*" }
-        if ($LMHashSetting -and [int]$LMHashSetting.SettingNumber -lt 3) {
-            $ComplianceScore -= 15
-            $ComplianceIssues += "Legacy LM hash compatibility enabled (security risk)"
-        }
-
-        # Check for anonymous access settings
-        $AnonymousSettings = $SecurityOptions | Where-Object { $_.KeyName -like "*Anonymous*" }
-        foreach ($Setting in $AnonymousSettings) {
-            if ($Setting.SettingBoolean -eq "true") {
-                $ComplianceScore -= 10
-                $ComplianceIssues += "Anonymous access enabled: $($Setting.KeyName)"
-            }
-        }
-    }
-
-    # Check for weak encryption protocols
-    if ($GPOReport.GPO.Computer.ExtensionData.Extension.RegistrySettings) {
-        $RegistrySettings = $GPOReport.GPO.Computer.ExtensionData.Extension.RegistrySettings
-
-        # Look for SSL/TLS settings
-        $WeakSSLSettings = $RegistrySettings | Where-Object {
-            $_.KeyName -like "*SSL*" -or $_.KeyName -like "*TLS*"
-        }
-        foreach ($Setting in $WeakSSLSettings) {
-            if ($Setting.ValueName -like "*SSL 2.0*" -or $Setting.ValueName -like "*SSL 3.0*") {
-                $ComplianceScore -= 20
-                $ComplianceIssues += "Weak SSL protocol enabled: $($Setting.ValueName)"
-            }
-        }
-    }
-
-    return @{
-        ComplianceScore = [math]::Max(0, $ComplianceScore)
-        ComplianceIssues = $ComplianceIssues
-    }
-}
-
-function Get-GPOLinkDetails {
-    param([string]$GPOID)
-
-    $LinkDetails = @()
-
-    try {
-        # Get all OUs and check for GPO links
-        $AllOUs = Get-ADOrganizationalUnit -Filter *
-        foreach ($OU in $AllOUs) {
-            $LinkedGPOs = Get-GPInheritance -Target $OU.DistinguishedName -ErrorAction SilentlyContinue
-            if ($LinkedGPOs.GpoLinks) {
-                foreach ($Link in $LinkedGPOs.GpoLinks) {
-                    if ($Link.GpoId -eq $GPOID) {
-                        $LinkDetails += @{
-                            Target = $OU.DistinguishedName
-                            TargetType = "OU"
-                            Enabled = $Link.Enabled
-                            Enforced = $Link.Enforced
-                            Order = $Link.Order
-                        }
-                    }
-                }
-            }
-        }
-
-        # Check domain-level links
-        $DomainLinks = Get-GPInheritance -Target (Get-ADDomain).DistinguishedName -ErrorAction SilentlyContinue
-        if ($DomainLinks.GpoLinks) {
-            foreach ($Link in $DomainLinks.GpoLinks) {
-                if ($Link.GpoId -eq $GPOID) {
-                    $LinkDetails += @{
-                        Target = "Domain Root"
-                        TargetType = "Domain"
-                        Enabled = $Link.Enabled
-                        Enforced = $Link.Enforced
-                        Order = $Link.Order
-                    }
-                }
-            }
-        }
-    } catch {
-        Write-Warning "Error getting link details for GPO $GPOID`: $($_.Exception.Message)"
-    }
-
-    return $LinkDetails
-}
-
+#region Group Policy Assessment
+Write-Host "Assessing Group Policy..." -ForegroundColor Cyan
 try {
-    $GPOs = Get-GPO -All -ErrorAction Stop
+    $GPOs = Get-GPO -All
     $GPOAnalysis = @()
-    $GPOSecuritySummary = @{
-        TotalGPOs = $GPOs.Count
-        LinkedGPOs = 0
-        UnlinkedGPOs = 0
-        SecurityIssuesFound = 0
-        HighRiskGPOs = 0
-        ComplianceViolations = 0
-        OrphanedGPOs = 0
-    }
 
-    $AllSecurityIssues = @()
-    $AllRecommendations = @()
-
-    Write-Host "Analyzing $($GPOs.Count) Group Policy Objects..." -ForegroundColor Yellow
-
-    $Counter = 0
     foreach ($GPO in $GPOs) {
-        $Counter++
-        Write-Progress -Activity "Analyzing GPOs" -Status "Processing $($GPO.DisplayName)" -PercentComplete (($Counter / $GPOs.Count) * 100)
-
         $GPOInfo = @{
-            DisplayName = $GPO.DisplayName
-            Id = $GPO.Id
-            CreationTime = $GPO.CreationTime
-            ModificationTime = $GPO.ModificationTime
-            Owner = $GPO.Owner
-            IsLinked = "No"
-            IsFullyDisabled = "No"
-            SecurityScore = 100
-            ComplianceScore = 100
-            SecurityIssues = @()
-            ComplianceIssues = @()
-            LinkCount = 0
-            LinkDetails = @()
-            UserSettingsEnabled = "Unknown"
-            ComputerSettingsEnabled = "Unknown"
-            PermissionsCount = 0
-            LastModifiedDays = ((Get-Date) - $GPO.ModificationTime).Days
-            IsOrphaned = $false
+            DisplayName       = $GPO.DisplayName
+            Id                = $GPO.Id
+            CreationTime      = $GPO.CreationTime
+            ModificationTime  = $GPO.ModificationTime
+            Owner             = $GPO.Owner
+            IsLinked          = "Unknown"
+            IsFullyDisabled   = "Unknown"
         }
 
         try {
-            # Generate comprehensive GPO report
+            # Generate GPO report as XML
             $ReportXml = Get-GPOReport -Guid $GPO.Id -ReportType XML -ErrorAction Stop
             [xml]$GPOReport = $ReportXml
 
-            # Basic GPO information
-            $GPOInfo.UserSettingsEnabled = $GPOReport.GPO.User.Enabled
-            $GPOInfo.ComputerSettingsEnabled = $GPOReport.GPO.Computer.Enabled
-
-            if ($GPOReport.GPO.User.Enabled -eq "false" -and $GPOReport.GPO.Computer.Enabled -eq "false") {
-                $GPOInfo.IsFullyDisabled = "Yes"
-            }
-
-            # Get detailed link information
-            $LinkDetails = Get-GPOLinkDetails -GPOID $GPO.Id
-            $GPOInfo.LinkDetails = $LinkDetails
-            $GPOInfo.LinkCount = $LinkDetails.Count
-
-            if ($LinkDetails.Count -gt 0) {
+            # Check if GPO is linked by checking <LinksTo> presence
+            if ($GPOReport.GPO.LinksTo) {
                 $GPOInfo.IsLinked = "Yes"
-                $GPOSecuritySummary.LinkedGPOs++
             } else {
-                $GPOSecuritySummary.UnlinkedGPOs++
-                # Check if it's truly orphaned (no settings and not linked)
-                if ($GPOReport.GPO.User.Enabled -eq "false" -and $GPOReport.GPO.Computer.Enabled -eq "false") {
-                    $GPOInfo.IsOrphaned = $true
-                    $GPOSecuritySummary.OrphanedGPOs++
-                }
+                $GPOInfo.IsLinked = "No"
             }
 
-            # Perform security analysis
-            $SecurityAnalysis = Test-GPOSecuritySettings -GPOReport $GPOReport -GPOName $GPO.DisplayName
-            $GPOInfo.SecurityIssues = $SecurityAnalysis.SecurityIssues
+            # Check if both User and Computer settings are disabled
+            $userEnabled = $GPOReport.GPO.User.Enabled
+            $computerEnabled = $GPOReport.GPO.Computer.Enabled
 
-            if ($SecurityAnalysis.SecurityIssues.Count -gt 0) {
-                $GPOSecuritySummary.SecurityIssuesFound++
-                $GPOInfo.SecurityScore = [math]::Max(0, 100 - ($SecurityAnalysis.SecurityIssues.Count * 15))
-                $AllSecurityIssues += $SecurityAnalysis.SecurityIssues
-                $AllRecommendations += $SecurityAnalysis.SecurityRecommendations
-
-                if ($GPOInfo.SecurityScore -lt 60) {
-                    $GPOSecuritySummary.HighRiskGPOs++
-                }
+            if ($userEnabled -eq "false" -and $computerEnabled -eq "false") {
+                $GPOInfo.IsFullyDisabled = "Yes"
+            } else {
+                $GPOInfo.IsFullyDisabled = "No"
             }
-
-            # Perform compliance analysis
-            $ComplianceAnalysis = Analyze-GPOCompliance -GPOReport $GPOReport -GPOName $GPO.DisplayName
-            $GPOInfo.ComplianceScore = $ComplianceAnalysis.ComplianceScore
-            $GPOInfo.ComplianceIssues = $ComplianceAnalysis.ComplianceIssues
-
-            if ($ComplianceAnalysis.ComplianceIssues.Count -gt 0) {
-                $GPOSecuritySummary.ComplianceViolations++
-            }
-
         } catch {
-            Write-Warning "Error analyzing GPO '$($GPO.DisplayName)': $($_.Exception.Message)"
-            $GPOInfo.SecurityIssues = @("Error during analysis: $($_.Exception.Message)")
+            $GPOInfo.IsLinked = "Error"
+            $GPOInfo.IsFullyDisabled = "Error"
         }
 
         # Get GPO permissions
@@ -2234,34 +1914,14 @@ try {
             $GPOPermissions = Get-GPPermission -Guid $GPO.Id -All -ErrorAction SilentlyContinue
             $GPOInfo.PermissionsCount = $GPOPermissions.Count
         } catch {
-            $GPOInfo.PermissionsCount = 0
+            $GPOInfo.PermissionsCount = "Error"
         }
 
         $GPOAnalysis += New-Object PSObject -Property $GPOInfo
     }
 
-    Write-Progress -Activity "Analyzing GPOs" -Completed
-
-    # Store results
     $AuditResults.GroupPolicy = $GPOAnalysis
-    $AuditResults.GPOSecuritySummary = $GPOSecuritySummary
-    $AuditResults.GPOAllSecurityIssues = $AllSecurityIssues | Select-Object -Unique
-    $AuditResults.GPOAllRecommendations = $AllRecommendations | Select-Object -Unique
-
-    # Display summary
-    Write-Host "`n" + "="*80 -ForegroundColor Cyan
-    Write-Host "Group Policy Security Analysis Summary" -ForegroundColor Cyan
-    Write-Host "="*80 -ForegroundColor Cyan
-    Write-Host "Total GPOs: $($GPOSecuritySummary.TotalGPOs)" -ForegroundColor White
-    Write-Host "Linked GPOs: $($GPOSecuritySummary.LinkedGPOs)" -ForegroundColor Green
-    Write-Host "Unlinked GPOs: $($GPOSecuritySummary.UnlinkedGPOs)" -ForegroundColor Yellow
-    Write-Host "Orphaned GPOs: $($GPOSecuritySummary.OrphanedGPOs)" -ForegroundColor Red
-    Write-Host "GPOs with Security Issues: $($GPOSecuritySummary.SecurityIssuesFound)" -ForegroundColor $(if($GPOSecuritySummary.SecurityIssuesFound -gt 0){"Red"}else{"Green"})
-    Write-Host "High Risk GPOs: $($GPOSecuritySummary.HighRiskGPOs)" -ForegroundColor $(if($GPOSecuritySummary.HighRiskGPOs -gt 0){"Red"}else{"Green"})
-    Write-Host "Compliance Violations: $($GPOSecuritySummary.ComplianceViolations)" -ForegroundColor $(if($GPOSecuritySummary.ComplianceViolations -gt 0){"Red"}else{"Green"})
-
 } catch {
-    Write-Error "Critical error in GPO analysis: $($_.Exception.Message)"
     $AuditResults.GroupPolicy = "Error: $($_.Exception.Message)"
 }
 
@@ -2640,341 +2300,138 @@ try {
 Write-Host "Analyzing Critical Security Events..." -ForegroundColor Cyan
 try {
     $EventAnalysis = @()
-
-    # Define critical events by log container
-    $CriticalEventContainers = @{
-        "Security" = @{
-            # Group Management Events
-            "4728" = @{ Description = "Member Added to Security-Enabled Global Group"; Severity = "High"; Category = "Group Management" }
-            "4729" = @{ Description = "Member Removed from Security-Enabled Global Group"; Severity = "Medium"; Category = "Group Management" }
-            "4732" = @{ Description = "Member Added to Security-Enabled Local Group"; Severity = "High"; Category = "Group Management" }
-            "4733" = @{ Description = "Member Removed from Security-Enabled Local Group"; Severity = "Medium"; Category = "Group Management" }
-            "4756" = @{ Description = "Member Added to Security-Enabled Universal Group"; Severity = "High"; Category = "Group Management" }
-            "4757" = @{ Description = "Member Removed from Security-Enabled Universal Group"; Severity = "Medium"; Category = "Group Management" }
-
-            # Account Management Events
-            "4720" = @{ Description = "User Account Created"; Severity = "High"; Category = "Account Management" }
-            "4726" = @{ Description = "User Account Deleted"; Severity = "Medium"; Category = "Account Management" }
-            "4741" = @{ Description = "Computer Account Created"; Severity = "Medium"; Category = "Account Management" }
-            "4743" = @{ Description = "Computer Account Deleted"; Severity = "Medium"; Category = "Account Management" }
-            "4767" = @{ Description = "User Account Unlocked"; Severity = "Medium"; Category = "Account Management" }
-
-            # Policy and Security Changes
-            "4719" = @{ Description = "System Audit Policy Changed"; Severity = "High"; Category = "Policy Changes" }
-            "4739" = @{ Description = "Domain Policy Changed"; Severity = "High"; Category = "Policy Changes" }
-            "4713" = @{ Description = "Kerberos Policy Changed"; Severity = "High"; Category = "Policy Changes" }
-            "4716" = @{ Description = "Trusted Domain Information Modified"; Severity = "Medium"; Category = "Policy Changes" }
-
-            # Advanced Security Events
-            "4765" = @{ Description = "SID History Added to Account"; Severity = "High"; Category = "Advanced Security" }
-            "4766" = @{ Description = "Attempt to Add SID History Failed"; Severity = "Medium"; Category = "Advanced Security" }
-            "4780" = @{ Description = "ACL Set on Accounts Which Are Members of Administrators Groups"; Severity = "High"; Category = "Advanced Security" }
-
-            # Privileged Access Events
-            "4648" = @{ Description = "Logon Attempted Using Explicit Credentials"; Severity = "Low"; Category = "Privileged Access" }
-            "4672" = @{ Description = "Special Privileges Assigned to New Logon"; Severity = "Medium"; Category = "Privileged Access" }
-            "4673" = @{ Description = "Privileged Service Called"; Severity = "Low"; Category = "Privileged Access" }
-            "4674" = @{ Description = "Operation Attempted on Privileged Object"; Severity = "Low"; Category = "Privileged Access" }
-
-            # Process and Service Events
-            "4688" = @{ Description = "New Process Created"; Severity = "Low"; Category = "Process/Service Events" }
-            "4697" = @{ Description = "Service Installed"; Severity = "Medium"; Category = "Process/Service Events" }
-
-            # Scheduled Tasks
-            "4698" = @{ Description = "Scheduled Task Created"; Severity = "Medium"; Category = "Scheduled Tasks" }
-            "4699" = @{ Description = "Scheduled Task Deleted"; Severity = "Medium"; Category = "Scheduled Tasks" }
-            "4700" = @{ Description = "Scheduled Task Enabled"; Severity = "Medium"; Category = "Scheduled Tasks" }
-            "4701" = @{ Description = "Scheduled Task Disabled"; Severity = "Medium"; Category = "Scheduled Tasks" }
-            "4702" = @{ Description = "Scheduled Task Updated"; Severity = "Medium"; Category = "Scheduled Tasks" }
-
-            # Directory Service Events
-            "5136" = @{ Description = "Directory Service Object Modified"; Severity = "High"; Category = "Directory Changes" }
-            "5137" = @{ Description = "Directory Service Object Created"; Severity = "High"; Category = "Directory Changes" }
-            "5138" = @{ Description = "Directory Service Object Undeleted"; Severity = "Medium"; Category = "Directory Changes" }
-            "5139" = @{ Description = "Directory Service Object Moved"; Severity = "Medium"; Category = "Directory Changes" }
-            "5141" = @{ Description = "Directory Service Object Deleted"; Severity = "High"; Category = "Directory Changes" }
-        }
-
-        "System" = @{
-            # Service Control Manager Events
-            "7034" = @{ Description = "Service Crashed Unexpectedly"; Severity = "High"; Category = "Service Issues" }
-            "7035" = @{ Description = "Service Start/Stop"; Severity = "Medium"; Category = "Service Management" }
-            "7036" = @{ Description = "Service Started or Stopped"; Severity = "Low"; Category = "Service Management" }
-            "7040" = @{ Description = "Service Start Type Changed"; Severity = "Medium"; Category = "Service Management" }
-
-            # System Events
-            "1074" = @{ Description = "System Shutdown/Restart Initiated"; Severity = "Medium"; Category = "System Events" }
-            "6005" = @{ Description = "Event Log Service Started"; Severity = "Low"; Category = "System Events" }
-            "6006" = @{ Description = "Event Log Service Stopped"; Severity = "Medium"; Category = "System Events" }
-            "6008" = @{ Description = "Unexpected System Shutdown"; Severity = "High"; Category = "System Events" }
-            "6009" = @{ Description = "System Started"; Severity = "Low"; Category = "System Events" }
-
-            # Disk and Storage Events
-            "51" = @{ Description = "Disk Error"; Severity = "High"; Category = "Storage Issues" }
-            "98" = @{ Description = "System File Corruption"; Severity = "High"; Category = "Storage Issues" }
-        }
-
-        "Application" = @{
-            # Application Crashes and Errors
-            "1000" = @{ Description = "Application Error"; Severity = "Medium"; Category = "Application Issues" }
-            "1001" = @{ Description = "Application Hang"; Severity = "Medium"; Category = "Application Issues" }
-            "1002" = @{ Description = "Application Crash"; Severity = "High"; Category = "Application Issues" }
-
-            # Windows Error Reporting
-            "1026" = @{ Description = "Windows Error Reporting"; Severity = "Medium"; Category = "System Errors" }
-
-            # MSI Installer Errors
-            "11707" = @{ Description = "Installation Completed Successfully"; Severity = "Low"; Category = "Installation" }
-            "11708" = @{ Description = "Installation Failed"; Severity = "Medium"; Category = "Installation" }
-            "11724" = @{ Description = "Package Removal Completed"; Severity = "Low"; Category = "Installation" }
-        }
-
-        "DFS Replication" = @{
-            # DFS Replication Issues
-            "4012" = @{ Description = "DFS Replication Service Stopped"; Severity = "High"; Category = "Replication Issues" }
-            "4013" = @{ Description = "DFS Replication Service Started"; Severity = "Low"; Category = "Replication Management" }
-            "5014" = @{ Description = "DFS Replication Conflict"; Severity = "Medium"; Category = "Replication Issues" }
-        }
-
-        "Directory Service" = @{
-            # Active Directory Events
-            "1" = @{ Description = "Active Directory Database Corruption"; Severity = "High"; Category = "AD Critical" }
-            "2" = @{ Description = "Active Directory Service Error"; Severity = "High"; Category = "AD Critical" }
-            "1046" = @{ Description = "Active Directory Replication Error"; Severity = "High"; Category = "AD Replication" }
-            "1388" = @{ Description = "Active Directory Replication Failure"; Severity = "High"; Category = "AD Replication" }
-            "1645" = @{ Description = "Active Directory Trust Failure"; Severity = "High"; Category = "AD Trust" }
-        }
-
-        "DNS Server" = @{
-            # DNS Critical Events
-            "150" = @{ Description = "DNS Server Failed to Start"; Severity = "High"; Category = "DNS Critical" }
-            "4013" = @{ Description = "DNS Server Unable to Load Zone"; Severity = "High"; Category = "DNS Issues" }
-            "6527" = @{ Description = "DNS Server Scavenging Error"; Severity = "Medium"; Category = "DNS Management" }
-        }
-
-        "File Replication Service" = @{
-            # FRS Events
-            "13508" = @{ Description = "FRS Cannot Communicate"; Severity = "High"; Category = "FRS Issues" }
-            "13509" = @{ Description = "FRS Replica Set Stopped"; Severity = "High"; Category = "FRS Issues" }
-        }
+    $CriticalEventsToCheck = @{
+        "4728" = "Member Added to Security-Enabled Global Group"
+        "4729" = "Member Removed from Security-Enabled Global Group"
+        "4732" = "Member Added to Security-Enabled Local Group"
+        "4733" = "Member Removed from Security-Enabled Local Group"
+        "4756" = "Member Added to Security-Enabled Universal Group"
+        "4757" = "Member Removed from Security-Enabled Universal Group"
+        "4720" = "User Account Created"
+        "4726" = "User Account Deleted"
+        "4741" = "Computer Account Created"
+        "4743" = "Computer Account Deleted"
+        "4719" = "System Audit Policy Changed"
+        "4739" = "Domain Policy Changed"
+        "4713" = "Kerberos Policy Changed"
+        "4716" = "Trusted Domain Information Modified"
+        "4765" = "SID History Added to Account"
+        "4766" = "Attempt to Add SID History Failed"
+        "4767" = "User Account Unlocked"
+        "4780" = "ACL Set on Accounts Which Are Members of Administrators Groups"
+        "4648" = "Logon Attempted Using Explicit Credentials"
+        "4672" = "Special Privileges Assigned to New Logon"
+        "4673" = "Privileged Service Called"
+        "4674" = "Operation Attempted on Privileged Object"
+        "4688" = "New Process Created"
+        "4697" = "Service Installed"
+        "4698" = "Scheduled Task Created"
+        "4699" = "Scheduled Task Deleted"
+        "4700" = "Scheduled Task Enabled"
+        "4701" = "Scheduled Task Disabled"
+        "4702" = "Scheduled Task Updated"
+        "5136" = "Directory Service Object Modified"
+        "5137" = "Directory Service Object Created"
+        "5138" = "Directory Service Object Undeleted"
+        "5139" = "Directory Service Object Moved"
+        "5141" = "Directory Service Object Deleted"
     }
-
-    # Define noise/generic error sources to filter out
-    $NoiseEventSources = @(
-        "PerfLib", "perflib", "Perflib",
-        "Schannel", "schannel", "SChannel",
-        "DCOM", "DistributedCOM",
-        "Microsoft-Windows-WMI", "WMI",
-        "Microsoft-Windows-Kernel-General",
-        "Microsoft-Windows-GroupPolicy",
-        "Microsoft-Windows-DNS-Client",
-        "Microsoft-Windows-Time-Service",
-        "Microsoft-Windows-User32",
-        "Microsoft-Windows-Winlogon",
-        "Microsoft-Windows-TerminalServices",
-        "VSS", "VssVC",
-        "EventLog",
-        "Outlook",
-        "Microsoft Office"
-    )
-
-    # Keywords to filter out from error descriptions
-    $NoiseKeywords = @(
-        "perflib", "performance counter", "performance library",
-        "schannel", "secure channel", "ssl handshake",
-        "wmi", "windows management",
-        "group policy", "winlogon", "user32",
-        "time service", "dns client", "vss",
-        "outlook", "office", "microsoft office"
-    )
-
-    # Get domain controllers for event analysis
-    $DCs = Get-ADDomainController -Filter * -ErrorAction SilentlyContinue
-    if (-not $DCs) {
-        Write-Warning "Unable to retrieve domain controllers for event analysis"
-        $AuditResults.EventLogAnalysis = "Error: Unable to retrieve domain controllers"
-        return
-    }
-
+    
     foreach ($DC in $DCs[0..2]) { # Check first 3 DCs to avoid timeout
         Write-Host "  Analyzing critical events on $($DC.DomainController)..." -ForegroundColor Yellow
-
-        # Iterate through each event log container
-        foreach ($LogName in $CriticalEventContainers.Keys) {
-            Write-Host "    Checking $LogName events..." -ForegroundColor Gray
-
-            foreach ($EventID in $CriticalEventContainers[$LogName].Keys) {
-                try {
-                    $EventConfig = $CriticalEventContainers[$LogName][$EventID]
-
-                    # Get events from the last 7 days
-                    $Events = Get-WinEvent -ComputerName $DC.DomainController -FilterHashtable @{
-                        LogName = $LogName
-                        ID = [int]$EventID
-                        StartTime = (Get-Date).AddDays(-7)
-                    } -MaxEvents 50 -ErrorAction SilentlyContinue
-
-                    if ($Events -and $Events.Count -gt 0) {
-                        # Use the predefined severity and category
-                        $Severity = $EventConfig.Severity
-                        $Category = $EventConfig.Category
-                        $Description = $EventConfig.Description
-
-                        # Build recent events array
-                        $RecentEvents = @()
-                        foreach ($Event in ($Events | Select-Object -First 3)) {
-                            try {
-                                $xml = [xml]$Event.ToXml()
-                                $UserName = "N/A"
-                                $TargetAccount = "N/A"
-
-                                # Try to extract username (mainly for Security events)
-                                if ($LogName -eq "Security") {
-                                    $UserNameNode = $xml.Event.EventData.Data | Where-Object {$_.Name -eq 'SubjectUserName'}
-                                    if ($UserNameNode) {
-                                        $UserName = $UserNameNode.'#text'
-                                    }
-
-                                    # Try to extract target account
-                                    $TargetNodes = $xml.Event.EventData.Data | Where-Object {$_.Name -in @('TargetUserName','TargetSid','MemberName')}
-                                    if ($TargetNodes) {
-                                        $TargetAccount = ($TargetNodes | Select-Object -First 1).'#text'
-                                    }
-                                } else {
-                                    # For non-Security logs, try to get general information
-                                    $UserName = if ($Event.UserId) { $Event.UserId.Value } else { "System" }
-                                    $TargetAccount = if ($xml.Event.EventData.Data) {
-                                        ($xml.Event.EventData.Data | Select-Object -First 1).'#text'
-                                    } else {
-                                        "N/A"
-                                    }
-                                }
-
-                                $RecentEvents += [PSCustomObject]@{
-                                    TimeCreated = $Event.TimeCreated
-                                    UserName = $UserName
-                                    TargetAccount = $TargetAccount
-                                    LogName = $LogName
-                                }
-                            } catch {
-                                $RecentEvents += [PSCustomObject]@{
-                                    TimeCreated = $Event.TimeCreated
-                                    UserName = "N/A"
-                                    TargetAccount = "N/A"
-                                    LogName = $LogName
-                                }
-                            }
-                        }
-
-                        # Add to event analysis
-                        $EventAnalysis += [PSCustomObject]@{
-                            DomainController = $DC.DomainController
-                            LogName = $LogName
-                            EventID = $EventID
-                            EventType = $Description
-                            Count = $Events.Count
-                            LastOccurrence = $Events[0].TimeCreated
-                            Severity = $Severity
-                            Category = $Category
-                            RecentEvents = $RecentEvents
-                        }
-                    }
-                } catch {
-                    # Only log critical errors, skip events that don't exist
-                    if ($_.Exception.Message -notlike "*No events were found*" -and
-                        $_.Exception.Message -notlike "*The specified channel could not be found*") {
-                        Write-Warning "Error checking Event $EventID in $LogName on $($DC.DomainController): $($_.Exception.Message)"
-                    }
-                }
-            }
-        }
-
-        # Collect general error events (Level 2 = Error) from key logs, filtered to avoid noise
-        Write-Host "    Collecting filtered error events..." -ForegroundColor Gray
-
-        $ErrorLogs = @("System", "Application", "Directory Service", "DNS Server")
-        foreach ($LogName in $ErrorLogs) {
+        
+        foreach ($EventID in $CriticalEventsToCheck.Keys) {
             try {
-                # Get error events from last 7 days
-                $ErrorEvents = Get-WinEvent -ComputerName $DC.DomainController -FilterHashtable @{
-                    LogName = $LogName
-                    Level = 2  # Error level
-                    StartTime = (Get-Date).AddDays(-7)
-                } -MaxEvents 100 -ErrorAction SilentlyContinue
-
-                if ($ErrorEvents) {
-                    # Group by Event ID and filter out noise
-                    $FilteredErrors = $ErrorEvents | Group-Object Id | ForEach-Object {
-                        $EventGroup = $_.Group
-                        $SampleEvent = $EventGroup[0]
-
-                        # Check if this is a noise event
-                        $IsNoise = $false
-
-                        # Filter by source provider
-                        if ($SampleEvent.ProviderName -in $NoiseEventSources) {
-                            $IsNoise = $true
-                        }
-
-                        # Filter by message content
-                        if (-not $IsNoise -and $SampleEvent.LevelDisplayName -eq "Error") {
-                            foreach ($NoiseKeyword in $NoiseKeywords) {
-                                if ($SampleEvent.Message -and $SampleEvent.Message.ToLower() -like "*$NoiseKeyword*") {
-                                    $IsNoise = $true
-                                    break
-                                }
+                $Events = Get-WinEvent -ComputerName $DC.DomainController -FilterHashtable @{LogName='Security'; ID=$EventID; StartTime=(Get-Date).AddDays(-7)} -MaxEvents 50 -ErrorAction SilentlyContinue
+                
+                if ($Events -and $Events.Count -gt 0) {
+                    # Determine severity level
+                    $Severity = "Low"
+                    if ($EventID -in @("4728","4732","4756","4720","4719","4739","4713","4765","4780","5136","5137","5141")) {
+                        $Severity = "High"
+                    } elseif ($EventID -in @("4729","4733","4757","4726","4743","4716","4766","4767","4672","4697","4698","4699","4700","4701","4702")) {
+                        $Severity = "Medium"
+                    }
+                    
+                    # Determine category
+                    $Category = "Other"
+                    if ($EventID -in @("4728","4729","4732","4733","4756","4757")) {
+                        $Category = "Group Management"
+                    } elseif ($EventID -in @("4720","4726","4741","4743","4767")) {
+                        $Category = "Account Management"
+                    } elseif ($EventID -in @("4719","4739","4713","4716")) {
+                        $Category = "Policy Changes"
+                    } elseif ($EventID -in @("4765","4766","4780")) {
+                        $Category = "Advanced Security"
+                    } elseif ($EventID -in @("4648","4672","4673","4674")) {
+                        $Category = "Privileged Access"
+                    } elseif ($EventID -in @("4688","4697")) {
+                        $Category = "Process/Service Events"
+                    } elseif ($EventID -in @("4698","4699","4700","4701","4702")) {
+                        $Category = "Scheduled Tasks"
+                    } elseif ($EventID -in @("5136","5137","5138","5139","5141")) {
+                        $Category = "Directory Changes"
+                    }
+                    
+                    # Build recent events array
+                    $RecentEvents = @()
+                    foreach ($Event in ($Events | Select-Object -First 3)) {
+                        try {
+                            $xml = [xml]$Event.ToXml()
+                            $UserName = "N/A"
+                            $TargetAccount = "N/A"
+                            
+                            # Try to extract username
+                            $UserNameNode = $xml.Event.EventData.Data | Where-Object {$_.Name -eq 'SubjectUserName'}
+                            if ($UserNameNode) {
+                                $UserName = $UserNameNode.'#text'
+                            }
+                            
+                            # Try to extract target account
+                            $TargetNodes = $xml.Event.EventData.Data | Where-Object {$_.Name -in @('TargetUserName','TargetSid','MemberName')}
+                            if ($TargetNodes) {
+                                $TargetAccount = ($TargetNodes | Select-Object -First 1).'#text'
+                            }
+                            
+                            $RecentEvents += [PSCustomObject]@{
+                                TimeCreated = $Event.TimeCreated
+                                UserName = $UserName
+                                TargetAccount = $TargetAccount
+                            }
+                        } catch {
+                            $RecentEvents += [PSCustomObject]@{
+                                TimeCreated = $Event.TimeCreated
+                                UserName = "N/A"
+                                TargetAccount = "N/A"
                             }
                         }
-
-                        # Skip if it's noise or if we already have this event ID from critical events
-                        if (-not $IsNoise -and -not ($EventAnalysis | Where-Object { $_.EventID -eq $SampleEvent.Id -and $_.LogName -eq $LogName })) {
-
-                            # Build recent events for this error
-                            $RecentErrorEvents = @()
-                            foreach ($ErrorEvent in ($EventGroup | Select-Object -First 3)) {
-                                $RecentErrorEvents += [PSCustomObject]@{
-                                    TimeCreated = $ErrorEvent.TimeCreated
-                                    UserName = if ($ErrorEvent.UserId) { $ErrorEvent.UserId.Value } else { "System" }
-                                    TargetAccount = "N/A"
-                                    LogName = $LogName
-                                }
-                            }
-
-                            # Create error event entry
-                            [PSCustomObject]@{
-                                DomainController = $DC.DomainController
-                                LogName = $LogName
-                                EventID = $SampleEvent.Id
-                                EventType = if ($SampleEvent.Message -and $SampleEvent.Message.Length -gt 100) {
-                                    $SampleEvent.Message.Substring(0, 100) + "..."
-                                } else {
-                                    $SampleEvent.Message
-                                }
-                                Count = $EventGroup.Count
-                                LastOccurrence = $EventGroup[0].TimeCreated
-                                Severity = "Medium"  # General errors are medium severity
-                                Category = "System Errors"
-                                RecentEvents = $RecentErrorEvents
-                                ProviderName = $SampleEvent.ProviderName
-                            }
-                        }
-                    } | Where-Object { $_ -ne $null }
-
-                    # Add filtered errors to analysis
-                    $EventAnalysis += $FilteredErrors
+                    }
+                    
+                    $EventAnalysis += [PSCustomObject]@{
+                        DomainController = $DC.DomainController
+                        EventID = $EventID
+                        EventType = $CriticalEventsToCheck[$EventID]
+                        Count = $Events.Count
+                        LastOccurrence = $Events[0].TimeCreated
+                        Severity = $Severity
+                        Category = $Category
+                        RecentEvents = $RecentEvents
+                    }
                 }
             } catch {
-                # Silently continue if log doesn't exist or can't be accessed
-                Write-Verbose "Could not access $LogName on $($DC.DomainController): $($_.Exception.Message)"
+                # Only log critical errors, skip events that don't exist
+                if ($_.Exception.Message -notlike "*No events were found*") {
+                    Write-Warning "Error checking Event $EventID on $($DC.DomainController): $($_.Exception.Message)"
+                }
             }
         }
     }
-
+    
     # Filter and organize results
     $AuditResults.EventLogAnalysis = $EventAnalysis | Sort-Object Severity, EventID
-
+    
     Write-Host "Critical event analysis completed. Found $($EventAnalysis.Count) event types with activity." -ForegroundColor Green
-
+    
 } catch {
     $AuditResults.EventLogAnalysis = "Error: $($_.Exception.Message)"
     Write-Error "Event Log Analysis failed: $($_.Exception.Message)"
@@ -3404,6 +2861,113 @@ try {
 $AuditResults.PrivilegedAccountMonitoring = $PrivilegedAccounts
 #endregion
 
+#region DC Performance Metrics
+Write-Host "Collecting DC Performance Metrics..." -ForegroundColor Cyan
+try {
+    $DCPerformanceMetrics = @()
+    $AllDomains = (Get-ADForest).Domains
+    
+    foreach ($Domain in $AllDomains) {
+        $DomainControllers = Get-ADDomainController -Filter * -Server $Domain
+        
+        foreach ($DC in $DomainControllers) {
+            Write-Host "  Collecting metrics for $($DC.HostName)..." -ForegroundColor Yellow
+            
+            $DCMetrics = @{
+                DomainController = $DC.HostName
+                Domain = $Domain
+                CollectionTime = Get-Date
+                CPUUsage = "N/A"
+                MemoryUsage = "N/A"
+                DiskUsage = @()
+                ADDatabaseSize = "N/A"
+                LogFileSize = "N/A"
+                NTDSPerformance = @()
+                LDAPConnections = "N/A"
+            }
+            
+            try {
+                # CPU Usage
+                $CPUUsage = Get-CimInstance -ClassName Win32_Processor -ComputerName $DC.HostName -ErrorAction SilentlyContinue |
+                    Measure-Object -Property LoadPercentage -Average
+                $DCMetrics.CPUUsage = "$([math]::Round($CPUUsage.Average, 2))%"
+                
+                # Memory Usage
+                $OS = Get-CimInstance -ClassName Win32_OperatingSystem -ComputerName $DC.HostName -ErrorAction SilentlyContinue
+                if ($OS) {
+                    $MemoryUsedPercent = [math]::Round(((($OS.TotalVisibleMemorySize - $OS.FreePhysicalMemory) / $OS.TotalVisibleMemorySize) * 100), 2)
+                    $DCMetrics.MemoryUsage = "$MemoryUsedPercent% ($([math]::Round(($OS.TotalVisibleMemorySize - $OS.FreePhysicalMemory) / 1MB, 2)) GB / $([math]::Round($OS.TotalVisibleMemorySize / 1MB, 2)) GB)"
+                }
+                
+                # Disk Usage
+                $Disks = Get-CimInstance -ClassName Win32_LogicalDisk -ComputerName $DC.HostName -Filter "DriveType = 3" -ErrorAction SilentlyContinue
+                foreach ($Disk in $Disks) {
+                    $UsedPercent = [math]::Round((($Disk.Size - $Disk.FreeSpace) / $Disk.Size) * 100, 2)
+                    $DCMetrics.DiskUsage += @{
+                        Drive = $Disk.DeviceID
+                        SizeGB = [math]::Round($Disk.Size / 1GB, 2)
+                        FreeGB = [math]::Round($Disk.FreeSpace / 1GB, 2)
+                        UsedPercent = $UsedPercent
+                    }
+                }
+                
+                # NTDS Database Size
+                $NTDSPath = "\\$($DC.HostName)\C$\Windows\NTDS\ntds.dit"
+                if (Test-Path $NTDSPath) {
+                    $DBSize = (Get-Item $NTDSPath -ErrorAction SilentlyContinue).Length
+                    $DCMetrics.ADDatabaseSize = "$([math]::Round($DBSize / 1GB, 2)) GB"
+                }
+                
+                # NTDS Log Files Size
+                $LogPath = "\\$($DC.HostName)\C$\Windows\NTDS\"
+                if (Test-Path $LogPath) {
+                    $LogFiles = Get-ChildItem "$LogPath*.log" -ErrorAction SilentlyContinue
+                    $TotalLogSize = ($LogFiles | Measure-Object -Property Length -Sum).Sum
+                    $DCMetrics.LogFileSize = "$([math]::Round($TotalLogSize / 1MB, 2)) MB"
+                }
+                
+                # Performance Counters (if accessible)
+                try {
+                    # LDAP Connections
+                    $LDAPConnections = (Get-Counter -ComputerName $DC.HostName -Counter "\NTDS\LDAP Client Sessions" -MaxSamples 1 -ErrorAction SilentlyContinue).CounterSamples.CookedValue
+                    $DCMetrics.LDAPConnections = [math]::Round($LDAPConnections, 0)
+                    
+                    $PerfCounters = @(
+                        "\NTDS\LDAP Successful Binds/sec",
+                        "\NTDS\LDAP Searches/sec",
+                        "\NTDS\DRA Inbound Values (DNs only)/sec"
+                    )
+                    
+                    foreach ($Counter in $PerfCounters) {
+                        try {
+                            $CounterValue = (Get-Counter -ComputerName $DC.HostName -Counter $Counter -MaxSamples 1 -ErrorAction SilentlyContinue).CounterSamples.CookedValue
+                            $DCMetrics.NTDSPerformance += @{
+                                Counter = $Counter.Split('\')[-1]
+                                Value = [math]::Round($CounterValue, 2)
+                            }
+                        } catch {
+                            # Counter not available
+                        }
+                    }
+                } catch {
+                    Write-Verbose "Performance counters not accessible for $($DC.HostName)"
+                }
+                
+            } catch {
+                Write-Warning "Error collecting performance metrics for $($DC.HostName): $_"
+            }
+            
+            $DCPerformanceMetrics += $DCMetrics
+        }
+    }
+    
+} catch {
+    Write-Warning "Error during DC performance metrics collection: $_"
+    $DCPerformanceMetrics = @{ Error = $_.Exception.Message }
+}
+
+$AuditResults.DCPerformanceMetrics = $DCPerformanceMetrics
+#endregion
 
 #region AD Database Health
 Write-Host "Checking AD Database Health..." -ForegroundColor Cyan
@@ -3441,25 +3005,8 @@ try {
                 if (Test-Path $NTDSPath) {
                     $DBFile = Get-Item $NTDSPath -ErrorAction SilentlyContinue
                     $DatabaseCheck.DatabasePath = $NTDSPath
-                    if ($DBFile -and $DBFile.Length) {
-                        $DatabaseCheck.DatabaseSize = "$([math]::Round($DBFile.Length / 1GB, 2)) GB"
-                        $DatabaseCheck.LastModified = $DBFile.LastWriteTime
-                    } else {
-                        $DatabaseCheck.DatabaseSize = "Unable to access database file"
-                    }
-                } else {
-                    # Try alternative method using WMI/CIM to get database size
-                    try {
-                        $RemoteDBFile = Get-CimInstance -ComputerName $DC.HostName -ClassName CIM_DataFile -Filter "Name='C:\\Windows\\NTDS\\ntds.dit'" -ErrorAction SilentlyContinue
-                        if ($RemoteDBFile -and $RemoteDBFile.FileSize) {
-                            $DatabaseCheck.DatabaseSize = "$([math]::Round($RemoteDBFile.FileSize / 1GB, 2)) GB"
-                            $DatabaseCheck.DatabasePath = "C:\\Windows\\NTDS\\ntds.dit (via WMI)"
-                        } else {
-                            $DatabaseCheck.DatabaseSize = "Database file not accessible (UNC and WMI failed)"
-                        }
-                    } catch {
-                        $DatabaseCheck.DatabaseSize = "Database file not accessible (UNC and WMI failed)"
-                    }
+                    $DatabaseCheck.DatabaseSize = "$([math]::Round($DBFile.Length / 1GB, 2)) GB"
+                    $DatabaseCheck.LastModified = $DBFile.LastWriteTime
                 }
                 
                 # Log files information
@@ -3469,39 +3016,13 @@ try {
                         $TotalLogSize = ($LogFiles | Measure-Object -Property Length -Sum).Sum
                         $DatabaseCheck.LogSize = "$([math]::Round($TotalLogSize / 1MB, 2)) MB"
                         $DatabaseCheck.LogFileCount = $LogFiles.Count
-                    } else {
-                        $DatabaseCheck.LogSize = "No log files found via UNC"
                     }
-
+                    
                     # Check available disk space
                     $LogDrive = $LogPath.Substring(2, 1)
                     $Drive = Get-CimInstance -ClassName Win32_LogicalDisk -ComputerName $DC.HostName -Filter "DeviceID = '$LogDrive`:'" -ErrorAction SilentlyContinue
                     if ($Drive) {
                         $DatabaseCheck.FreeLogSpace = "$([math]::Round($Drive.FreeSpace / 1GB, 2)) GB"
-                    } else {
-                        $DatabaseCheck.FreeLogSpace = "Unable to check drive space"
-                    }
-                } else {
-                    # Try alternative method using WMI/CIM to get log files
-                    try {
-                        $RemoteLogFiles = Get-CimInstance -ComputerName $DC.HostName -ClassName CIM_DataFile -Filter "Path='\\Windows\\NTDS\\' AND Extension='log'" -ErrorAction SilentlyContinue
-                        if ($RemoteLogFiles) {
-                            $TotalLogSize = ($RemoteLogFiles | Measure-Object -Property FileSize -Sum).Sum
-                            $DatabaseCheck.LogSize = "$([math]::Round($TotalLogSize / 1MB, 2)) MB (via WMI)"
-                            $DatabaseCheck.LogFileCount = $RemoteLogFiles.Count
-                        } else {
-                            $DatabaseCheck.LogSize = "Log files not accessible (UNC and WMI failed)"
-                        }
-                    } catch {
-                        $DatabaseCheck.LogSize = "Log files not accessible (UNC and WMI failed)"
-                    }
-
-                    # Check available disk space using WMI
-                    $Drive = Get-CimInstance -ClassName Win32_LogicalDisk -ComputerName $DC.HostName -Filter "DeviceID = 'C:'" -ErrorAction SilentlyContinue
-                    if ($Drive) {
-                        $DatabaseCheck.FreeLogSpace = "$([math]::Round($Drive.FreeSpace / 1GB, 2)) GB"
-                    } else {
-                        $DatabaseCheck.FreeLogSpace = "Unable to check drive space"
                     }
                 }
                 
@@ -3536,21 +3057,11 @@ try {
                 }
                 
                 # Database compaction recommendation
-                $DBSizeGB = 0
-                if ($DBFile -and $DBFile.Length) {
-                    $DBSizeGB = [math]::Round($DBFile.Length / 1GB, 2)
-                } elseif ($RemoteDBFile -and $RemoteDBFile.FileSize) {
-                    $DBSizeGB = [math]::Round($RemoteDBFile.FileSize / 1GB, 2)
-                }
-
-                if ($DBSizeGB -gt 0) {
-                    if ($DBSizeGB -gt 10) {
-                        $DatabaseCheck.DatabaseCompaction = "Database is $DBSizeGB GB. Consider offline defragmentation if growth is unexpected."
-                    } else {
-                        $DatabaseCheck.DatabaseCompaction = "Database size ($DBSizeGB GB) appears normal."
-                    }
+                $DBSizeGB = [math]::Round((Get-Item $NTDSPath -ErrorAction SilentlyContinue).Length / 1GB, 2)
+                if ($DBSizeGB -gt 10) {
+                    $DatabaseCheck.DatabaseCompaction = "Database is $DBSizeGB GB. Consider offline defragmentation if growth is unexpected."
                 } else {
-                    $DatabaseCheck.DatabaseCompaction = "Unable to determine database size for compaction analysis"
+                    $DatabaseCheck.DatabaseCompaction = "Database size ($DBSizeGB GB) appears normal."
                 }
                 
             } catch {
@@ -3589,332 +3100,6 @@ try {
 }
 
 $AuditResults.ADDatabaseHealth = $ADDatabaseHealth
-#endregion
-
-#region SYSVOL and NTDS Integrity Analysis
-Write-Host "Analyzing SYSVOL and NTDS Integrity..." -ForegroundColor Cyan
-try {
-    $SysvolNtdsAnalysis = @{
-        SysvolChecks = @()
-        NtdsChecks = @()
-        Summary = @{
-            SysvolHealthy = $true
-            NtdsHealthy = $true
-            TotalIssues = 0
-            CriticalIssues = 0
-        }
-        Recommendations = @()
-    }
-
-    $AllDomains = (Get-ADForest).Domains
-
-    foreach ($Domain in $AllDomains) {
-        $DomainControllers = Get-ADDomainController -Filter * -Server $Domain
-
-        foreach ($DC in $DomainControllers) {
-            Write-Host "  Checking SYSVOL and NTDS on $($DC.HostName)..." -ForegroundColor Yellow
-
-            # SYSVOL Analysis
-            $SysvolCheck = @{
-                DomainController = $DC.HostName
-                Domain = $Domain
-                SysvolPath = "\\$($DC.HostName)\SYSVOL"
-                NetlogonPath = "\\$($DC.HostName)\NETLOGON"
-                SysvolAccessible = $false
-                NetlogonAccessible = $false
-                SysvolSize = "N/A"
-                PolicyCount = 0
-                ScriptCount = 0
-                FolderStructure = @()
-                Permissions = @()
-                ReplicationStatus = "Unknown"
-                LastModified = "N/A"
-                Issues = @()
-            }
-
-            # Check SYSVOL accessibility and structure
-            try {
-                if (Test-Path $SysvolCheck.SysvolPath) {
-                    $SysvolCheck.SysvolAccessible = $true
-
-                    # Get SYSVOL size and structure
-                    try {
-                        $SysvolItems = Get-ChildItem $SysvolCheck.SysvolPath -Recurse -ErrorAction SilentlyContinue
-                        if ($SysvolItems) {
-                            $SysvolCheck.SysvolSize = "$([math]::Round(($SysvolItems | Where-Object {!$_.PSIsContainer} | Measure-Object -Property Length -Sum).Sum / 1MB, 2)) MB"
-                            $SysvolCheck.PolicyCount = ($SysvolItems | Where-Object {$_.Name -like "*{*-*-*-*-*}*"}).Count
-                            $SysvolCheck.ScriptCount = ($SysvolItems | Where-Object {$_.Extension -in @('.bat','.cmd','.ps1','.vbs')}).Count
-
-                            # Check folder structure
-                            $SysvolCheck.FolderStructure = @(
-                                @{ Path = "$($SysvolCheck.SysvolPath)\$Domain"; Exists = (Test-Path "$($SysvolCheck.SysvolPath)\$Domain") }
-                                @{ Path = "$($SysvolCheck.SysvolPath)\$Domain\Policies"; Exists = (Test-Path "$($SysvolCheck.SysvolPath)\$Domain\Policies") }
-                                @{ Path = "$($SysvolCheck.SysvolPath)\$Domain\scripts"; Exists = (Test-Path "$($SysvolCheck.SysvolPath)\$Domain\scripts") }
-                            )
-
-                            # Get last modification time
-                            $LatestFile = $SysvolItems | Where-Object {!$_.PSIsContainer} | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                            if ($LatestFile) {
-                                $SysvolCheck.LastModified = $LatestFile.LastWriteTime
-                            }
-                        }
-                    } catch {
-                        $SysvolCheck.Issues += "Error analyzing SYSVOL contents: $($_.Exception.Message)"
-                        $SysvolNtdsAnalysis.Summary.TotalIssues++
-                    }
-
-                    # Check SYSVOL permissions
-                    try {
-                        $Acl = Get-Acl $SysvolCheck.SysvolPath -ErrorAction SilentlyContinue
-                        if ($Acl) {
-                            $SysvolCheck.Permissions = @(
-                                @{ Principal = "SYSTEM"; Access = ($Acl.Access | Where-Object {$_.IdentityReference -like "*SYSTEM*"}).FileSystemRights }
-                                @{ Principal = "Domain Admins"; Access = ($Acl.Access | Where-Object {$_.IdentityReference -like "*Domain Admins*"}).FileSystemRights }
-                                @{ Principal = "Authenticated Users"; Access = ($Acl.Access | Where-Object {$_.IdentityReference -like "*Authenticated Users*"}).FileSystemRights }
-                            )
-                        }
-                    } catch {
-                        $SysvolCheck.Issues += "Error checking SYSVOL permissions: $($_.Exception.Message)"
-                        $SysvolNtdsAnalysis.Summary.TotalIssues++
-                    }
-
-                } else {
-                    $SysvolCheck.Issues += "SYSVOL share not accessible"
-                    $SysvolNtdsAnalysis.Summary.SysvolHealthy = $false
-                    $SysvolNtdsAnalysis.Summary.CriticalIssues++
-                }
-            } catch {
-                $SysvolCheck.Issues += "Error accessing SYSVOL: $($_.Exception.Message)"
-                $SysvolNtdsAnalysis.Summary.SysvolHealthy = $false
-                $SysvolNtdsAnalysis.Summary.CriticalIssues++
-            }
-
-            # Check NETLOGON accessibility
-            try {
-                if (Test-Path $SysvolCheck.NetlogonPath) {
-                    $SysvolCheck.NetlogonAccessible = $true
-                } else {
-                    $SysvolCheck.Issues += "NETLOGON share not accessible"
-                    $SysvolNtdsAnalysis.Summary.SysvolHealthy = $false
-                    $SysvolNtdsAnalysis.Summary.TotalIssues++
-                }
-            } catch {
-                $SysvolCheck.Issues += "Error accessing NETLOGON: $($_.Exception.Message)"
-                $SysvolNtdsAnalysis.Summary.SysvolHealthy = $false
-                $SysvolNtdsAnalysis.Summary.TotalIssues++
-            }
-
-            # SYSVOL Replication Status (using DFSR or FRS)
-            try {
-                # Check for DFSR first (Windows 2008+)
-                $DfsrInfo = Invoke-Command -ComputerName $DC.HostName -ScriptBlock {
-                    Get-WmiObject -Namespace "root\MicrosoftDfs" -Class DfsrReplicationGroupConfig -ErrorAction SilentlyContinue
-                } -ErrorAction SilentlyContinue
-
-                if ($DfsrInfo) {
-                    $SysvolCheck.ReplicationStatus = "DFSR - Active"
-                } else {
-                    # Check for FRS (legacy)
-                    $FrsInfo = Invoke-Command -ComputerName $DC.HostName -ScriptBlock {
-                        Get-WmiObject -Class Win32_NTDomain -ErrorAction SilentlyContinue
-                    } -ErrorAction SilentlyContinue
-
-                    if ($FrsInfo) {
-                        $SysvolCheck.ReplicationStatus = "FRS - Legacy (Consider upgrading to DFSR)"
-                        $SysvolCheck.Issues += "Using legacy FRS replication - recommend upgrading to DFSR"
-                        $SysvolNtdsAnalysis.Summary.TotalIssues++
-                    } else {
-                        $SysvolCheck.ReplicationStatus = "Unknown"
-                        $SysvolCheck.Issues += "Unable to determine replication method"
-                        $SysvolNtdsAnalysis.Summary.TotalIssues++
-                    }
-                }
-            } catch {
-                $SysvolCheck.ReplicationStatus = "Error checking replication"
-                $SysvolCheck.Issues += "Error checking SYSVOL replication: $($_.Exception.Message)"
-                $SysvolNtdsAnalysis.Summary.TotalIssues++
-            }
-
-            $SysvolNtdsAnalysis.SysvolChecks += $SysvolCheck
-
-            # NTDS.dit Analysis
-            $NtdsCheck = @{
-                DomainController = $DC.HostName
-                Domain = $Domain
-                NtdsPath = "C:\Windows\NTDS\ntds.dit"
-                NtdsAccessible = $false
-                DatabaseSize = "N/A"
-                DatabaseIntegrity = "Unknown"
-                LastBackup = "N/A"
-                TransactionLogs = @()
-                FragmentationLevel = "N/A"
-                DatabaseVersion = "N/A"
-                Issues = @()
-                DatabaseHealth = "Unknown"
-            }
-
-            # Check NTDS.dit accessibility and properties
-            try {
-                # Try direct file access first
-                $NtdsFilePath = "\\$($DC.HostName)\C$\Windows\NTDS\ntds.dit"
-
-                if (Test-Path $NtdsFilePath) {
-                    $NtdsCheck.NtdsAccessible = $true
-                    $NtdsFile = Get-Item $NtdsFilePath -ErrorAction SilentlyContinue
-
-                    if ($NtdsFile) {
-                        $NtdsCheck.DatabaseSize = "$([math]::Round($NtdsFile.Length / 1GB, 2)) GB"
-
-                        # Check if database size is reasonable
-                        $DbSizeGB = [math]::Round($NtdsFile.Length / 1GB, 2)
-                        if ($DbSizeGB -gt 50) {
-                            $NtdsCheck.Issues += "Large database size ($DbSizeGB GB) - consider maintenance"
-                            $SysvolNtdsAnalysis.Summary.TotalIssues++
-                        }
-                    }
-                } else {
-                    # Try WMI method as fallback
-                    $RemoteNtdsFile = Get-CimInstance -ComputerName $DC.HostName -ClassName CIM_DataFile -Filter "Name='C:\\Windows\\NTDS\\ntds.dit'" -ErrorAction SilentlyContinue
-
-                    if ($RemoteNtdsFile) {
-                        $NtdsCheck.NtdsAccessible = $true
-                        $NtdsCheck.DatabaseSize = "$([math]::Round($RemoteNtdsFile.FileSize / 1GB, 2)) GB"
-                    } else {
-                        $NtdsCheck.Issues += "NTDS.dit file not accessible"
-                        $SysvolNtdsAnalysis.Summary.NtdsHealthy = $false
-                        $SysvolNtdsAnalysis.Summary.CriticalIssues++
-                    }
-                }
-
-                # Check transaction logs
-                $LogPath = "\\$($DC.HostName)\C$\Windows\NTDS\"
-                if (Test-Path $LogPath) {
-                    $LogFiles = Get-ChildItem "$LogPath*.log" -ErrorAction SilentlyContinue
-                    if ($LogFiles) {
-                        foreach ($LogFile in $LogFiles) {
-                            $NtdsCheck.TransactionLogs += @{
-                                Name = $LogFile.Name
-                                Size = "$([math]::Round($LogFile.Length / 1MB, 2)) MB"
-                                LastModified = $LogFile.LastWriteTime
-                            }
-                        }
-
-                        # Check for excessive log accumulation
-                        $TotalLogSize = ($LogFiles | Measure-Object -Property Length -Sum).Sum
-                        if ($TotalLogSize -gt 10GB) {
-                            $NtdsCheck.Issues += "Excessive transaction log accumulation ($([math]::Round($TotalLogSize / 1GB, 2)) GB)"
-                            $SysvolNtdsAnalysis.Summary.TotalIssues++
-                        }
-                    }
-                }
-
-                # Check database integrity using esentutl (if accessible)
-                try {
-                    $IntegrityCheck = Invoke-Command -ComputerName $DC.HostName -ScriptBlock {
-                        $EsentResult = & esentutl /mh "C:\Windows\NTDS\ntds.dit" 2>&1
-                        if ($EsentResult -match "State:\s+(.+)") {
-                            return $Matches[1].Trim()
-                        }
-                        return "Unknown"
-                    } -ErrorAction SilentlyContinue
-
-                    if ($IntegrityCheck) {
-                        $NtdsCheck.DatabaseIntegrity = $IntegrityCheck
-                        if ($IntegrityCheck -ne "Clean Shutdown") {
-                            $NtdsCheck.Issues += "Database not in clean shutdown state: $IntegrityCheck"
-                            $SysvolNtdsAnalysis.Summary.NtdsHealthy = $false
-                            $SysvolNtdsAnalysis.Summary.CriticalIssues++
-                        }
-                    }
-                } catch {
-                    $NtdsCheck.DatabaseIntegrity = "Unable to check"
-                    $NtdsCheck.Issues += "Could not verify database integrity"
-                    $SysvolNtdsAnalysis.Summary.TotalIssues++
-                }
-
-                # Check for recent system state backup
-                try {
-                    $BackupEvents = Get-WinEvent -ComputerName $DC.HostName -FilterHashtable @{
-                        LogName = 'Application'
-                        ID = 2001  # System State backup event
-                        StartTime = (Get-Date).AddDays(-30)
-                    } -MaxEvents 1 -ErrorAction SilentlyContinue
-
-                    if ($BackupEvents) {
-                        $NtdsCheck.LastBackup = $BackupEvents[0].TimeCreated
-                        $DaysOld = ((Get-Date) - $BackupEvents[0].TimeCreated).Days
-                        if ($DaysOld -gt 7) {
-                            $NtdsCheck.Issues += "Last backup is $DaysOld days old"
-                            $SysvolNtdsAnalysis.Summary.TotalIssues++
-                        }
-                    } else {
-                        $NtdsCheck.LastBackup = "No recent backup found (30 days)"
-                        $NtdsCheck.Issues += "No recent system state backup detected"
-                        $SysvolNtdsAnalysis.Summary.TotalIssues++
-                    }
-                } catch {
-                    $NtdsCheck.LastBackup = "Unable to check backup status"
-                    $NtdsCheck.Issues += "Could not verify backup status"
-                    $SysvolNtdsAnalysis.Summary.TotalIssues++
-                }
-
-                # Overall database health assessment
-                if ($NtdsCheck.Issues.Count -eq 0) {
-                    $NtdsCheck.DatabaseHealth = "Healthy"
-                } elseif ($NtdsCheck.Issues.Count -le 2) {
-                    $NtdsCheck.DatabaseHealth = "Minor Issues"
-                } else {
-                    $NtdsCheck.DatabaseHealth = "Critical Issues"
-                    $SysvolNtdsAnalysis.Summary.NtdsHealthy = $false
-                }
-
-            } catch {
-                $NtdsCheck.Issues += "Error analyzing NTDS.dit: $($_.Exception.Message)"
-                $NtdsCheck.DatabaseHealth = "Error"
-                $SysvolNtdsAnalysis.Summary.NtdsHealthy = $false
-                $SysvolNtdsAnalysis.Summary.CriticalIssues++
-            }
-
-            $SysvolNtdsAnalysis.NtdsChecks += $NtdsCheck
-        }
-    }
-
-    # Generate recommendations
-    if ($SysvolNtdsAnalysis.Summary.CriticalIssues -gt 0) {
-        $SysvolNtdsAnalysis.Recommendations += "Critical issues detected requiring immediate attention"
-    }
-
-    if (-not $SysvolNtdsAnalysis.Summary.SysvolHealthy) {
-        $SysvolNtdsAnalysis.Recommendations += "SYSVOL replication issues detected - check DFSR/FRS health"
-    }
-
-    if (-not $SysvolNtdsAnalysis.Summary.NtdsHealthy) {
-        $SysvolNtdsAnalysis.Recommendations += "NTDS database issues detected - consider maintenance procedures"
-    }
-
-    $FrsCount = ($SysvolNtdsAnalysis.SysvolChecks | Where-Object {$_.ReplicationStatus -like "*FRS*"}).Count
-    if ($FrsCount -gt 0) {
-        $SysvolNtdsAnalysis.Recommendations += "Upgrade from FRS to DFSR for better SYSVOL replication"
-    }
-
-    $LargeDbCount = ($SysvolNtdsAnalysis.NtdsChecks | Where-Object {$_.DatabaseSize -like "*GB" -and [float]($_.DatabaseSize -replace " GB","") -gt 20}).Count
-    if ($LargeDbCount -gt 0) {
-        $SysvolNtdsAnalysis.Recommendations += "Consider offline defragmentation for large NTDS databases"
-    }
-
-    $AuditResults.SysvolNtdsAnalysis = $SysvolNtdsAnalysis
-    Write-Host "SYSVOL and NTDS analysis completed." -ForegroundColor Green
-
-} catch {
-    $AuditResults.SysvolNtdsAnalysis = @{
-        Error = $_.Exception.Message
-        SysvolChecks = @()
-        NtdsChecks = @()
-        Summary = @{ SysvolHealthy = $false; NtdsHealthy = $false; TotalIssues = 1; CriticalIssues = 1 }
-        Recommendations = @("Unable to complete SYSVOL and NTDS analysis")
-    }
-    Write-Error "SYSVOL and NTDS analysis failed: $($_.Exception.Message)"
-}
 #endregion
 
 #region Schema Architecture Analysis
@@ -4598,14 +3783,9 @@ Write-Host "Generating HTML Report..." -ForegroundColor Green
 
 $HTMLReport = @"
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Active Directory Audit Report</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
@@ -4691,27 +3871,17 @@ $HTMLReport = @"
             border-left: 4px solid #ef4444;
             font-size: 0.875rem;
         }
-        .success {
-            background: #dcfce7;
-            border: 1px solid #22c55e;
+        .success { 
+            background: #dcfce7; 
+            border: 1px solid #22c55e; 
             color: #166534;
-            padding: 20px 24px;
-            border-radius: 8px;
+            padding: 20px 24px; 
+            border-radius: 8px; 
             margin: 24px 0;
             border-left: 4px solid #22c55e;
             font-size: 0.875rem;
         }
-        .info {
-            background: #e0f2fe;
-            border: 1px solid #0284c7;
-            color: #0c4a6e;
-            padding: 20px 24px;
-            border-radius: 8px;
-            margin: 24px 0;
-            border-left: 4px solid #0284c7;
-            font-size: 0.875rem;
-        }
-
+        
         table { width: 100%; border-collapse: collapse; margin: 15px 0; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         th, td { border: none; padding: 12px 15px; text-align: left; }
         th { background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); color: white; font-weight: 500; }
@@ -4737,94 +3907,48 @@ $HTMLReport = @"
             background-color: #d1ecf1 !important;
             color: #0c5460;
         }
-
-        /* Direct info class for table rows */
-        tr.info {
-            background-color: #e0f2fe !important;
-            color: #0c4a6e;
-        }
-
-        tr.info td {
-            background-color: #e0f2fe !important;
-            color: #0c4a6e;
-        }
-
-        /* Info header styling */
-        h5.info {
-            color: #0c4a6e;
-            background-color: #e0f2fe;
-            padding: 8px 12px;
-            border-radius: 4px;
-            border-left: 3px solid #0284c7;
-            margin: 16px 0 8px 0;
-        }
         
         .table .table-primary {
             background-color: #cce7ff !important;
             color: #004085;
         }
-
-        /* Table cell specific status styling (without heavy padding) */
-        td.success {
-            background-color: #dcfce7 !important;
-            color: #166534;
-            font-weight: 500;
-        }
-
-        td.warning {
-            background-color: #fef3c7 !important;
-            color: #92400e;
-            font-weight: 500;
-        }
-
-        td.error {
-            background-color: #fee2e2 !important;
-            color: #991b1b;
-            font-weight: 500;
-        }
-
-        /* Badge-like status indicators - subtle styling */
+        
+        /* Badge-like status indicators */
         .badge {
             display: inline-block;
-            padding: 2px 6px;
+            padding: 4px 8px;
             font-size: 0.75rem;
             font-weight: 600;
-            line-height: 1.2;
+            line-height: 1;
             text-align: center;
             white-space: nowrap;
             vertical-align: baseline;
-            border-radius: 12px;
-            border: 1px solid;
+            border-radius: 4px;
         }
-
+        
         .badge-success {
-            color: #166534;
-            background-color: transparent;
-            border-color: #166534;
+            color: #fff;
+            background-color: #28a745;
         }
-
+        
         .badge-warning {
-            color: #92400e;
-            background-color: transparent;
-            border-color: #92400e;
+            color: #212529;
+            background-color: #ffc107;
         }
-
+        
         .badge-danger {
-            color: #991b1b;
-            background-color: transparent;
-            border-color: #991b1b;
+            color: #fff;
+            background-color: #dc3545;
         }
-
+        
         .badge-info {
-            color: #0c5460;
-            background-color: transparent;
-            border-color: #0c5460;
+            color: #fff;
+            background-color: #17a2b8;
         }
-
+        
         .badge-primary {
-            color: #004085;
-            background-color: transparent;
-            border-color: #004085;
+            color: #fff;
+            background-color: #007bff;
         }
         
         .badge-secondary {
@@ -5041,24 +4165,8 @@ $HTMLReport = @"
             color: #92400e; 
         }
         .status-indicator .status-icon { margin-right: 8px; font-size: 16px; }
-        .status.success {
-            color: #166534;
-            font-weight: 600;
-            border-left: 2px solid #166534;
-            padding-left: 6px;
-        }
-        .status.warning {
-            color: #92400e;
-            font-weight: 600;
-            border-left: 2px solid #92400e;
-            padding-left: 6px;
-        }
-        .status.error {
-            color: #991b1b;
-            font-weight: 600;
-            border-left: 2px solid #991b1b;
-            padding-left: 6px;
-        }
+        .status.success { color: #059669; font-weight: 600; }
+        .status.warning { color: #d97706; font-weight: 600; }
         
         .info-grid { margin: 12px 0; }
         .info-grid p { margin: 6px 0; }
@@ -5086,106 +4194,12 @@ $HTMLReport = @"
             .metric { min-width: 90px; margin: 4px; padding: 12px; }
         }
         
-        /* Status indicators with left border styling - more subtle and professional */
-        .status-online {
-            border-left: 4px solid #10b981 !important;
-            background-color: rgba(16, 185, 129, 0.05) !important;
-            padding-left: 12px !important;
-        }
-        .status-warning {
-            border-left: 4px solid #f59e0b !important;
-            background-color: rgba(245, 158, 11, 0.05) !important;
-            padding-left: 12px !important;
-        }
-        .status-error {
-            border-left: 4px solid #ef4444 !important;
-            background-color: rgba(239, 68, 68, 0.05) !important;
-            padding-left: 12px !important;
-        }
-        .status-unknown {
-            border-left: 4px solid #6b7280 !important;
-            background-color: rgba(107, 114, 128, 0.05) !important;
-            padding-left: 12px !important;
-        }
-
-        /* DNS Table specific styles */
-        .table-responsive {
-            overflow-x: auto;
-            margin-bottom: 1rem;
-        }
-
-        .dns-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 15px 0;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            background: white;
-        }
-
-        .dns-table th {
-            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
-            color: white;
-            font-weight: 500;
-            padding: 12px 15px;
-            text-align: left;
-            border: none;
-        }
-
-        .dns-table td {
-            padding: 12px 15px;
-            border: none;
-            border-bottom: 1px solid #e2e8f0;
-        }
-
-        .dns-table tr:nth-child(even) {
-            background-color: rgba(52,152,219,0.03);
-        }
-
-        .dns-table tr:hover {
-            background-color: rgba(52,152,219,0.08);
-        }
-
-        .dns-table .status {
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-
-        .dns-table .status.success {
-            color: #166534;
-            font-weight: 600;
-            border-left: 3px solid #166534;
-            padding-left: 8px;
-        }
-
-        .dns-table .status.warning {
-            color: #92400e;
-            font-weight: 600;
-            border-left: 3px solid #92400e;
-            padding-left: 8px;
-        }
-
-        .dns-table .status.error {
-            color: #991b1b;
-            font-weight: 600;
-            border-left: 3px solid #991b1b;
-            padding-left: 8px;
-        }
-
-        @media (max-width: 768px) {
-            .dns-table {
-                font-size: 0.875rem;
-            }
-
-            .dns-table th,
-            .dns-table td {
-                padding: 8px 10px;
-            }
-        }
-
+        /* Additional status row styling for DCDiag tables */
+        .status-online { background-color: #dcfce7 !important; }
+        .status-warning { background-color: #fef3c7 !important; }
+        .status-error { background-color: #fee2e2 !important; }
+        .status-unknown { background-color: #f3f4f6 !important; }
+        
         .fsmo-summary { 
             margin-top: 16px; 
             padding: 12px 16px; 
@@ -5392,189 +4406,24 @@ $(if ($AuditResults.AccountsAnalysis.Computers.AllComputersList) {
         }
     </script>
 </head>
-<body class="bg-light">
-    <div class="container-fluid">
-        <!-- Header Section -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card shadow-sm border-0">
-                    <div class="card-header bg-primary text-white">
-                        <div class="row align-items-center">
-                            <div class="col-md-8">
-                                <h1 class="h3 mb-0">
-                                    <i class="bi bi-shield-check me-2"></i>
-                                    Active Directory Audit Report
-                                </h1>
-                            </div>
-                            <div class="col-md-4 text-md-end">
-                                <small class="opacity-75">
-                                    <i class="bi bi-calendar3 me-1"></i>
-                                    Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-                                </small>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="card-body bg-gradient">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="d-flex align-items-center mb-2">
-                                    <i class="bi bi-building text-primary me-2"></i>
-                                    <strong class="me-2">Domain:</strong>
-                                    <span class="badge bg-light text-dark">$(try { (Get-ADDomain).DNSRoot } catch { "Error retrieving domain" })</span>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="d-flex align-items-center mb-2">
-                                    <i class="bi bi-diagram-3 text-success me-2"></i>
-                                    <strong class="me-2">Forest:</strong>
-                                    <span class="badge bg-light text-dark">$(try { (Get-ADForest).Name } catch { "Error retrieving forest" })</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<body>
+    <div class="container">
+    <div class="header">
+        <h1>🔐 Active Directory Audit Report</h1>
+        <p><strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>
+        <p><strong>Domain:</strong> $(try { (Get-ADDomain).DNSRoot } catch { "Error retrieving domain" })</p>
+        <p><strong>Forest:</strong> $(try { (Get-ADForest).Name } catch { "Error retrieving forest" })</p>
+    </div>
 
-        <!-- Stats Dashboard Section -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card shadow-sm border-0">
-                    <div class="card-header bg-light">
-                        <h4 class="mb-0">
-                            <i class="bi bi-graph-up text-primary me-2"></i>
-                            Audit Overview & Key Metrics
-                        </h4>
-                    </div>
-                    <div class="card-body">
-                        <div class="row g-3">
-                            <!-- Domain Controllers Stats -->
-                            <div class="col-xl-3 col-lg-6 col-md-6">
-                                <div class="card bg-primary bg-gradient text-white h-100">
-                                    <div class="card-body">
-                                        <div class="d-flex justify-content-between">
-                                            <div>
-                                                <h6 class="text-uppercase text-white-50 small">Domain Controllers</h6>
-                                                <h2 class="mb-0" id="dcCount">$(if ($AuditResults.EnhancedDCHealth) { $AuditResults.EnhancedDCHealth.Count } else { 0 })</h2>
-                                                <span class="small">Total DCs Found</span>
-                                            </div>
-                                            <div class="align-self-center">
-                                                <i class="bi bi-server" style="font-size: 2rem; opacity: 0.8;"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- User Accounts Stats -->
-                            <div class="col-xl-3 col-lg-6 col-md-6">
-                                <div class="card bg-success bg-gradient text-white h-100">
-                                    <div class="card-body">
-                                        <div class="d-flex justify-content-between">
-                                            <div>
-                                                <h6 class="text-uppercase text-white-50 small">User Accounts</h6>
-                                                <h2 class="mb-0" id="userCount">$(if ($AuditResults.AccountsAnalysis.Users.TotalUsers) { $AuditResults.AccountsAnalysis.Users.TotalUsers } else { 0 })</h2>
-                                                <span class="small">Active Users</span>
-                                            </div>
-                                            <div class="align-self-center">
-                                                <i class="bi bi-people" style="font-size: 2rem; opacity: 0.8;"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Computer Accounts Stats -->
-                            <div class="col-xl-3 col-lg-6 col-md-6">
-                                <div class="card bg-info bg-gradient text-white h-100">
-                                    <div class="card-body">
-                                        <div class="d-flex justify-content-between">
-                                            <div>
-                                                <h6 class="text-uppercase text-white-50 small">Computer Accounts</h6>
-                                                <h2 class="mb-0" id="computerCount">$(if ($AuditResults.AccountsAnalysis.Computers.TotalComputers) { $AuditResults.AccountsAnalysis.Computers.TotalComputers } else { 0 })</h2>
-                                                <span class="small">Total Computers</span>
-                                            </div>
-                                            <div class="align-self-center">
-                                                <i class="bi bi-laptop" style="font-size: 2rem; opacity: 0.8;"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Security Events Stats -->
-                            <div class="col-xl-3 col-lg-6 col-md-6">
-                                <div class="card bg-warning bg-gradient text-white h-100">
-                                    <div class="card-body">
-                                        <div class="d-flex justify-content-between">
-                                            <div>
-                                                <h6 class="text-uppercase text-white-50 small">Security Events</h6>
-                                                <h2 class="mb-0" id="securityEvents">$(if ($AuditResults.EventLogAnalysis.TotalCriticalEvents) { $AuditResults.EventLogAnalysis.TotalCriticalEvents } else { 0 })</h2>
-                                                <span class="small">Critical Events</span>
-                                            </div>
-                                            <div class="align-self-center">
-                                                <i class="bi bi-shield-exclamation" style="font-size: 2rem; opacity: 0.8;"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Charts Row -->
-                        <div class="row mt-4">
-                            <div class="col-md-6">
-                                <div class="card bg-light">
-                                    <div class="card-header">
-                                        <h6 class="mb-0">
-                                            <i class="bi bi-pie-chart text-primary me-2"></i>
-                                            Account Distribution
-                                        </h6>
-                                    </div>
-                                    <div class="card-body">
-                                        <canvas id="accountChart" width="400" height="200"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="card bg-light">
-                                    <div class="card-header">
-                                        <h6 class="mb-0">
-                                            <i class="bi bi-bar-chart text-success me-2"></i>
-                                            Infrastructure Health
-                                        </h6>
-                                    </div>
-                                    <div class="card-body">
-                                        <canvas id="healthChart" width="400" height="200"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
     <!-- ============================================ -->
     <!-- 🏗️ SECTION 1: INFRASTRUCTURE & FOUNDATION -->
     <!-- ============================================ -->
 
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card shadow-sm">
-                <div class="card-header bg-secondary text-white">
-                    <h4 class="mb-0">
-                        <i class="bi bi-diagram-3 me-2"></i>
-                        Infrastructure & Foundation
-                    </h4>
-                    <small class="text-white-50">Core Active Directory infrastructure components including domain controllers, replication, DNS, and forest structure.</small>
-                </div>
-                <div class="card-body">
-"@
-
-$HTMLReport += @"
-                    <div class="row">
-                        <div class="col-12">
+    <div class="section">
+        <h2>🏗️ Infrastructure & Foundation</h2>
+        <p>Core Active Directory infrastructure components including domain controllers, replication, DNS, and forest structure.</p>
+    </div>
 
     <div class="section">
         <h2>🖥️ Domain Controllers Analysis</h2>
@@ -5771,81 +4620,6 @@ $HTMLReport += @"
     </div>
 
     <div class="section">
-        <h2>📊 DC Performance Metrics</h2>
-        <table>
-            <tr>
-                <th>Domain Controller</th>
-                <th>CPU Usage</th>
-                <th>Memory Usage</th>
-                <th>AD Database Size</th>
-                <th>Log File Size</th>
-                <th>LDAP Connections</th>
-            </tr>
-"@
-
-if ($AuditResults.DCPerformanceMetrics -and $AuditResults.DCPerformanceMetrics.Count -gt 0) {
-    foreach ($DC in $AuditResults.DCPerformanceMetrics) {
-        if ($DC.DomainController) {
-            $HTMLReport += @"
-                <tr>
-                    <td><strong>$($DC.DomainController)</strong></td>
-                    <td>$($DC.CPUUsage)</td>
-                    <td>$($DC.MemoryUsage)</td>
-                    <td>$($DC.ADDatabaseSize)</td>
-                    <td>$($DC.LogFileSize)</td>
-                    <td>$($DC.LDAPConnections)</td>
-                </tr>
-"@
-        }
-    }
-} else {
-    $HTMLReport += @"
-            <tr><td colspan="6">No performance metrics available or access denied</td></tr>
-"@
-}
-
-$HTMLReport += @"
-        </table>
-    </div>
-
-    <div class="section">
-        <h2>🗄️ AD Database Health</h2>
-        <table>
-            <tr>
-                <th>Domain Controller</th>
-                <th>Database Size</th>
-                <th>Log Size</th>
-                <th>Free Space</th>
-                <th>Last Backup</th>
-                <th>Replication Errors</th>
-            </tr>
-"@
-
-if ($AuditResults.ADDatabaseHealth.DatabaseIntegrity -and $AuditResults.ADDatabaseHealth.DatabaseIntegrity.Count -gt 0) {
-    foreach ($DB in $AuditResults.ADDatabaseHealth.DatabaseIntegrity) {
-        $HasErrors = $DB.ReplicationErrors -and $DB.ReplicationErrors.Count -gt 0 -and $DB.ReplicationErrors[0] -ne "Unable to check replication status"
-        $HTMLReport += @"
-                <tr>
-                    <td><strong>$($DB.DomainController)</strong></td>
-                    <td>$($DB.DatabaseSize)</td>
-                    <td>$($DB.LogSize)</td>
-                    <td>$($DB.FreeLogSpace)</td>
-                    <td>$($DB.LastBackup)</td>
-                    <td>$(if ($HasErrors) { $DB.ReplicationErrors.Count } else { 'None' })</td>
-                </tr>
-"@
-    }
-} else {
-    $HTMLReport += @"
-            <tr><td colspan="6">No database health information available</td></tr>
-"@
-}
-
-$HTMLReport += @"
-        </table>
-    </div>
-
-    <div class="section">
         <h2>🔄 Replication Health Assessment</h2>
 "@
 
@@ -5872,14 +4646,9 @@ if ($AuditResults.DNSConfiguration -is [array] -and $AuditResults.DNSConfigurati
     
     # DNS Status Overview Table
     $HTMLReport += "<h3>📊 DNS Status Overview</h3>"
-    $HTMLReport += "<div class='table-responsive'>"
-    $HTMLReport += "<table class='dns-table'>"
+    $HTMLReport += "<table>"
     $HTMLReport += "<thead><tr><th>Domain Controller</th><th>Connectivity</th><th>DNS Server IP</th><th>DCDiag DNS</th><th>Domain Resolution</th><th>Reverse Lookup</th><th>Scavenging</th><th>Issues Found</th></tr></thead><tbody>"
-
-    if ($AuditResults.DNSConfiguration.Count -eq 0) {
-        $HTMLReport += "<tr><td colspan='8' class='text-center'><em>No DNS configuration data available</em></td></tr>"
-    }
-
+    
     foreach ($DNS in $AuditResults.DNSConfiguration) {
         # Determine status classes for connectivity
         $ConnectivityClass = switch ($DNS.ConnectivityStatus) {
@@ -5896,35 +4665,25 @@ if ($AuditResults.DNSConfiguration -is [array] -and $AuditResults.DNSConfigurati
             default { "warning" }
         }
         
-        $IssueCount = if ($DNS.DNSFailures -and $DNS.DNSFailures.Count) { $DNS.DNSFailures.Count } else { 0 }
+        $IssueCount = if ($DNS.DNSFailures) { $DNS.DNSFailures.Count } else { 0 }
         $IssueClass = if ($IssueCount -eq 0) { "success" } elseif ($IssueCount -lt 5) { "warning" } else { "error" }
         
-        # Ensure all properties have values
-        $DCName = if ($DNS.DomainController) { $DNS.DomainController } else { "Unknown" }
-        $ConnStatus = if ($DNS.ConnectivityStatus) { $DNS.ConnectivityStatus } else { "Unknown" }
-        $DNSServerIP = if ($DNS.DNSServer) { $DNS.DNSServer } else { "Unknown" }
-        $DCDiagResult = if ($DNS.DCDiagDNS) { $DNS.DCDiagDNS } else { "Unknown" }
-        $DomainRes = if ($DNS.DomainResolution) { $DNS.DomainResolution } else { "Unknown" }
-        $ReverseRes = if ($DNS.ReverseLookup) { $DNS.ReverseLookup } else { "Unknown" }
-        $Scavenging = if ($DNS.ScavengingEnabled) { $DNS.ScavengingEnabled } else { "Unknown" }
-
         $HTMLReport += "<tr class='$ConnectivityClass'>"
-        $HTMLReport += "<td><strong>$DCName</strong></td>"
-        $HTMLReport += "<td><span class='status $ConnectivityClass'>$ConnStatus</span></td>"
-        $HTMLReport += "<td>$DNSServerIP</td>"
-        $HTMLReport += "<td><span class='status $DCDiagClass'>$DCDiagResult</span></td>"
-        $HTMLReport += "<td>$DomainRes</td>"
-        $HTMLReport += "<td>$ReverseRes</td>"
-        $HTMLReport += "<td>$Scavenging</td>"
+        $HTMLReport += "<td><strong>$($DNS.DomainController)</strong></td>"
+        $HTMLReport += "<td><span class='status $ConnectivityClass'>$($DNS.ConnectivityStatus)</span></td>"
+        $HTMLReport += "<td>$($DNS.DNSServer)</td>"
+        $HTMLReport += "<td><span class='status $DCDiagClass'>$($DNS.DCDiagDNS)</span></td>"
+        $HTMLReport += "<td>$($DNS.DomainResolution)</td>"
+        $HTMLReport += "<td>$($DNS.ReverseLookup)</td>"
+        $HTMLReport += "<td>$($DNS.ScavengingEnabled)</td>"
         $HTMLReport += "<td><span class='status $IssueClass'>$IssueCount issues</span></td>"
         $HTMLReport += "</tr>"
     }
     $HTMLReport += "</tbody></table>"
-    $HTMLReport += "</div>"
-
+    
     # Connectivity Issues Summary
     $OfflineDCs = $AuditResults.DNSConfiguration | Where-Object { $_.ConnectivityStatus -ne "Online" }
-    if ($OfflineDCs -and $OfflineDCs.Count -gt 0) {
+    if ($OfflineDCs.Count -gt 0) {
         $HTMLReport += "<div class='warning'>"
         $HTMLReport += "<h4>⚠️ Connectivity Issues Detected</h4>"
         $HTMLReport += "<p><strong>$($OfflineDCs.Count)</strong> Domain Controller(s) are experiencing connectivity issues:</p>"
@@ -5943,7 +4702,7 @@ if ($AuditResults.DNSConfiguration -is [array] -and $AuditResults.DNSConfigurati
     }
     
     # DNS Issues Details
-    $TotalIssuesCount = ($AuditResults.DNSConfiguration | ForEach-Object { if ($_.DNSFailures -and $_.DNSFailures.Count) { $_.DNSFailures.Count } else { 0 } } | Measure-Object -Sum).Sum
+    $TotalIssuesCount = ($AuditResults.DNSConfiguration | ForEach-Object { if ($_.DNSFailures) { $_.DNSFailures.Count } else { 0 } } | Measure-Object -Sum).Sum
     
     if ($TotalIssuesCount -gt 0) {
         $HTMLReport += "<h3>🔍 Detailed DNS Issues ($TotalIssuesCount total)</h3>"
@@ -5959,7 +4718,7 @@ if ($AuditResults.DNSConfiguration -is [array] -and $AuditResults.DNSConfigurati
                     $TypeClass = switch ($IssueGroup.Name) {
                         "Connectivity" { "error" }
                         "DCDiag" { "warning" }
-                        "Obsolete" { "info" }
+                        "Obsolete" { "warning" }
                         "Configuration" { "warning" }
                         "System" { "error" }
                         default { "warning" }
@@ -6132,232 +4891,29 @@ $HTMLReport += @"
     </div>
 
     <div class="section">
-        <h2>📋 Group Policy Security Analysis</h2>
+        <h2>📋 Group Policy Assessment</h2>
 "@
 
-if ($AuditResults.GroupPolicy -is [array] -and $AuditResults.GPOSecuritySummary) {
-    $Summary = $AuditResults.GPOSecuritySummary
-
-    # Security Summary Metrics
-    $HTMLReport += @"
-        <div class="subsection">
-            <h3>🎯 Security Overview</h3>
-            <div class="row">
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-primary">$($Summary.TotalGPOs)</h5>
-                            <p class="card-text">Total GPOs</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-success">$($Summary.LinkedGPOs)</h5>
-                            <p class="card-text">Linked GPOs</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title $(if($Summary.HighRiskGPOs -gt 0){'text-danger'}else{'text-success'})">$($Summary.HighRiskGPOs)</h5>
-                            <p class="card-text">High Risk GPOs</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title $(if($Summary.OrphanedGPOs -gt 0){'text-warning'}else{'text-success'})">$($Summary.OrphanedGPOs)</h5>
-                            <p class="card-text">Orphaned GPOs</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-"@
-
-    # Security Issues Summary
-    if ($AuditResults.GPOAllSecurityIssues -and $AuditResults.GPOAllSecurityIssues.Count -gt 0) {
-        $HTMLReport += @"
-        <div class="subsection">
-            <h3>⚠️ Security Issues Found</h3>
-            <div class="alert alert-warning">
-                <strong>$($AuditResults.GPOAllSecurityIssues.Count) unique security issues detected across all GPOs:</strong>
-                <ul class="mt-2">
-"@
-        foreach ($Issue in $AuditResults.GPOAllSecurityIssues) {
-            $HTMLReport += "<li>[System.Web.HttpUtility]::HtmlEncode($Issue)</li>"
-        }
-        $HTMLReport += @"
-                </ul>
-            </div>
-        </div>
-"@
+if ($AuditResults.GroupPolicy -is [array]) {
+    $TotalGPOs = $AuditResults.GroupPolicy.Count
+    $LinkedGPOs = ($AuditResults.GroupPolicy | Where-Object {$_.IsLinked -eq "Yes"}).Count
+    $UnlinkedGPOs = $TotalGPOs - $LinkedGPOs
+    
+    $HTMLReport += "<div class='metric'><div class='number'>$TotalGPOs</div><div class='label'>Total GPOs</div></div>"
+    $HTMLReport += "<div class='metric'><div class='number'>$LinkedGPOs</div><div class='label'>Linked GPOs</div></div>"
+    $HTMLReport += "<div class='metric'><div class='number'>$UnlinkedGPOs</div><div class='label'>Unlinked GPOs</div></div>"
+    
+    if ($UnlinkedGPOs -gt 0) {
+        $HTMLReport += "<div class='warning'>$UnlinkedGPOs unlinked GPOs detected - consider cleanup</div>"
     }
-
-    # Recommendations
-    if ($AuditResults.GPOAllRecommendations -and $AuditResults.GPOAllRecommendations.Count -gt 0) {
-        $HTMLReport += @"
-        <div class="subsection">
-            <h3>💡 Security Recommendations</h3>
-            <div class="alert alert-info">
-                <ul class="mb-0">
-"@
-        foreach ($Recommendation in $AuditResults.GPOAllRecommendations) {
-            $HTMLReport += "<li>[System.Web.HttpUtility]::HtmlEncode($Recommendation)</li>"
-        }
-        $HTMLReport += @"
-                </ul>
-            </div>
-        </div>
-"@
+    
+    $HTMLReport += "<table><thead><tr><th>GPO Name</th><th>Created</th><th>Modified</th><th>Owner</th><th>Linked</th><th>Permissions</th></tr></thead><tbody>"
+    foreach ($GPO in $AuditResults.GroupPolicy | Sort-Object DisplayName) {
+        $HTMLReport += "<tr><td>$($GPO.DisplayName)</td><td>$($GPO.CreationTime)</td><td>$($GPO.ModificationTime)</td><td>$($GPO.Owner)</td><td>$($GPO.IsLinked)</td><td>$($GPO.PermissionsCount)</td></tr>"
     }
-
-    # Detailed GPO Analysis Table
-    $HTMLReport += @"
-        <div class="subsection">
-            <h3>📊 Detailed GPO Analysis</h3>
-            <div class="table-responsive">
-                <table class="table table-striped table-hover">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>GPO Name</th>
-                            <th>Status</th>
-                            <th>Security Score</th>
-                            <th>Compliance Score</th>
-                            <th>Links</th>
-                            <th>Last Modified</th>
-                            <th>Issues</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-"@
-
-    foreach ($GPO in $AuditResults.GroupPolicy | Sort-Object SecurityScore) {
-        $StatusClass = "success"
-        $StatusText = "✅ Healthy"
-
-        if ($GPO.IsOrphaned) {
-            $StatusClass = "warning"
-            $StatusText = "🗑️ Orphaned"
-        } elseif ($GPO.SecurityScore -lt 60) {
-            $StatusClass = "danger"
-            $StatusText = "🚨 High Risk"
-        } elseif ($GPO.SecurityScore -lt 80) {
-            $StatusClass = "warning"
-            $StatusText = "⚠️ Medium Risk"
-        }
-
-        $SecurityScoreClass = if ($GPO.SecurityScore -ge 80) { "text-success" } elseif ($GPO.SecurityScore -ge 60) { "text-warning" } else { "text-danger" }
-        $ComplianceScoreClass = if ($GPO.ComplianceScore -ge 80) { "text-success" } elseif ($GPO.ComplianceScore -ge 60) { "text-warning" } else { "text-danger" }
-
-        $IssueCount = $GPO.SecurityIssues.Count + $GPO.ComplianceIssues.Count
-        $IssuesBadge = if ($IssueCount -gt 0) { "<span class='badge bg-danger'>$IssueCount</span>" } else { "<span class='badge bg-success'>0</span>" }
-
-        $LastModifiedClass = if ($GPO.LastModifiedDays -gt 365) { "text-warning" } elseif ($GPO.LastModifiedDays -gt 730) { "text-danger" } else { "text-muted" }
-
-        $HTMLReport += @"
-                        <tr class="table-$StatusClass">
-                            <td><strong>[System.Web.HttpUtility]::HtmlEncode($($GPO.DisplayName))</strong></td>
-                            <td>$StatusText</td>
-                            <td><span class="$SecurityScoreClass"><strong>$($GPO.SecurityScore)%</strong></span></td>
-                            <td><span class="$ComplianceScoreClass"><strong>$($GPO.ComplianceScore)%</strong></span></td>
-                            <td>
-                                <span class="badge $(if($GPO.LinkCount -gt 0){'bg-success'}else{'bg-secondary'})">$($GPO.LinkCount)</span>
-                                $(if($GPO.IsLinked -eq 'No'){'<span class="badge bg-warning">Unlinked</span>'}else{''})
-                            </td>
-                            <td class="$LastModifiedClass">$($GPO.LastModifiedDays) days ago</td>
-                            <td>$IssuesBadge</td>
-                        </tr>
-"@
-
-        # Add issue details if present
-        if ($IssueCount -gt 0) {
-            $HTMLReport += @"
-                        <tr class="table-light">
-                            <td colspan="7">
-                                <div class="ms-3">
-"@
-            if ($GPO.SecurityIssues.Count -gt 0) {
-                $HTMLReport += "<small><strong>Security Issues:</strong></small><ul class='small mb-1'>"
-                foreach ($Issue in $GPO.SecurityIssues) {
-                    $HTMLReport += "<li class='text-danger'>[System.Web.HttpUtility]::HtmlEncode($Issue)</li>"
-                }
-                $HTMLReport += "</ul>"
-            }
-
-            if ($GPO.ComplianceIssues.Count -gt 0) {
-                $HTMLReport += "<small><strong>Compliance Issues:</strong></small><ul class='small mb-1'>"
-                foreach ($Issue in $GPO.ComplianceIssues) {
-                    $HTMLReport += "<li class='text-warning'>[System.Web.HttpUtility]::HtmlEncode($Issue)</li>"
-                }
-                $HTMLReport += "</ul>"
-            }
-
-            $HTMLReport += @"
-                                </div>
-                            </td>
-                        </tr>
-"@
-        }
-    }
-
-    $HTMLReport += @"
-                    </tbody>
-                </table>
-            </div>
-        </div>
-"@
-
-    # GPO Link Analysis
-    $LinkedGPOs = $AuditResults.GroupPolicy | Where-Object { $_.LinkCount -gt 0 }
-    if ($LinkedGPOs) {
-        $HTMLReport += @"
-        <div class="subsection">
-            <h3>🔗 GPO Link Analysis</h3>
-            <div class="table-responsive">
-                <table class="table table-sm">
-                    <thead class="table-secondary">
-                        <tr>
-                            <th>GPO Name</th>
-                            <th>Linked To</th>
-                            <th>Link Status</th>
-                            <th>Enforced</th>
-                            <th>Order</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-"@
-        foreach ($GPO in $LinkedGPOs) {
-            foreach ($Link in $GPO.LinkDetails) {
-                $LinkTarget = if ($Link.TargetType -eq "Domain") { "🏢 Domain Root" } else { "📁 " + $Link.Target.Split(',')[0].Replace('OU=','') }
-                $EnabledBadge = if ($Link.Enabled) { "<span class='badge bg-success'>Enabled</span>" } else { "<span class='badge bg-secondary'>Disabled</span>" }
-                $EnforcedBadge = if ($Link.Enforced) { "<span class='badge bg-warning'>Enforced</span>" } else { "<span class='badge bg-light text-dark'>Normal</span>" }
-
-                $HTMLReport += @"
-                        <tr>
-                            <td>[System.Web.HttpUtility]::HtmlEncode($($GPO.DisplayName))</td>
-                            <td>$LinkTarget</td>
-                            <td>$EnabledBadge</td>
-                            <td>$EnforcedBadge</td>
-                            <td><span class='badge bg-info'>$($Link.Order)</span></td>
-                        </tr>
-"@
-            }
-        }
-        $HTMLReport += @"
-                    </tbody>
-                </table>
-            </div>
-        </div>
-"@
-    }
-
+    $HTMLReport += "</tbody></table>"
 } else {
-    $HTMLReport += "<div class='alert alert-danger'>Failed to analyze Group Policy: $($AuditResults.GroupPolicy)</div>"
+    $HTMLReport += "<div class='error'>$($AuditResults.GroupPolicy)</div>"
 }
 
 $HTMLReport += @"
@@ -6797,58 +5353,25 @@ $HTMLReport += @"
     </div>
 
     <div class="section">
-        <h2>🔍 Security Events & Error Analysis</h2>
+        <h2>🔍 Critical Security Events Analysis</h2>
 "@
 
 if ($AuditResults.EventLogAnalysis -is [array] -and $AuditResults.EventLogAnalysis.Count -gt 0) {
-
+    
     # Event Summary by Category and Severity
     $HighSeverityEvents = $AuditResults.EventLogAnalysis | Where-Object { $_.Severity -eq "High" }
     $MediumSeverityEvents = $AuditResults.EventLogAnalysis | Where-Object { $_.Severity -eq "Medium" }
     $LowSeverityEvents = $AuditResults.EventLogAnalysis | Where-Object { $_.Severity -eq "Low" }
-    $SystemErrorEvents = $AuditResults.EventLogAnalysis | Where-Object { $_.Category -eq "System Errors" }
-    $CriticalSecurityEvents = $AuditResults.EventLogAnalysis | Where-Object { $_.Severity -eq "High" -and $_.Category -ne "System Errors" }
     $TotalEvents = ($AuditResults.EventLogAnalysis | Measure-Object Count -Sum).Sum
-
-    $HTMLReport += @"
-        <div class="subsection">
-            <h3>📊 Event Summary (Last 7 Days)</h3>
-            <div class="row">
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-danger">$($HighSeverityEvents.Count)</h5>
-                            <p class="card-text">High Severity</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-warning">$($MediumSeverityEvents.Count)</h5>
-                            <p class="card-text">Medium Severity</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-info">$($SystemErrorEvents.Count)</h5>
-                            <p class="card-text">System Errors</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-primary">$TotalEvents</h5>
-                            <p class="card-text">Total Events</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-"@
+    
+    $HTMLReport += "<div class='warning'>"
+    $HTMLReport += "<h4>📊 Event Summary (Last 7 Days)</h4>"
+    $HTMLReport += "<div class='info-grid'>"
+    $HTMLReport += "<p><strong>High Priority Events:</strong> $($HighSeverityEvents.Count) types found</p>"
+    $HTMLReport += "<p><strong>Medium Priority Events:</strong> $($MediumSeverityEvents.Count) types found</p>"
+    $HTMLReport += "<p><strong>Total Event Occurrences:</strong> $TotalEvents events</p>"
+    $HTMLReport += "</div>"
+    $HTMLReport += "</div>"
     
     # High Priority Events Section
     if ($HighSeverityEvents.Count -gt 0) {
@@ -6916,55 +5439,7 @@ if ($AuditResults.EventLogAnalysis -is [array] -and $AuditResults.EventLogAnalys
             $HTMLReport += "</table>"
         }
     }
-
-    # System Errors Section
-    if ($SystemErrorEvents.Count -gt 0) {
-        $HTMLReport += @"
-        <div class="subsection">
-            <h3>⚠️ System Errors (Filtered)</h3>
-            <div class="alert alert-info">
-                <p><strong>Note:</strong> Generic/noise errors (perflib, schannel, WMI, etc.) have been filtered out.
-                Only significant system errors are shown below.</p>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-striped">
-                    <thead class="table-secondary">
-                        <tr>
-                            <th>Domain Controller</th>
-                            <th>Event ID</th>
-                            <th>Source</th>
-                            <th>Error Description</th>
-                            <th>Count</th>
-                            <th>Last Occurrence</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-"@
-
-        foreach ($Event in $SystemErrorEvents | Sort-Object Count -Descending) {
-            $ErrorDescription = [System.Web.HttpUtility]::HtmlEncode($Event.EventType)
-            $ProviderName = if ($Event.ProviderName) { [System.Web.HttpUtility]::HtmlEncode($Event.ProviderName) } else { "System" }
-
-            $HTMLReport += @"
-                        <tr>
-                            <td><strong>$($Event.DomainController)</strong></td>
-                            <td><span class="badge bg-warning">$($Event.EventID)</span></td>
-                            <td><small>$ProviderName</small></td>
-                            <td>$ErrorDescription</td>
-                            <td><span class="badge $(if($Event.Count -gt 10){'bg-danger'}elseif($Event.Count -gt 5){'bg-warning'}else{'bg-info'})">$($Event.Count)</span></td>
-                            <td class="text-muted"><small>$($Event.LastOccurrence)</small></td>
-                        </tr>
-"@
-        }
-
-        $HTMLReport += @"
-                    </tbody>
-                </table>
-            </div>
-        </div>
-"@
-    }
-
+    
     # Low Priority Events Summary
     if ($LowSeverityEvents.Count -gt 0) {
         $HTMLReport += "<h3>ℹ️ Low Priority Events Summary</h3>"
@@ -7034,20 +5509,36 @@ if ($AuditResults.GroupNesting -is [array]) {
     $HTMLReport += "<strong>View Controls:</strong> "
     $HTMLReport += "<button class='control-btn' onclick='expandAllGroups()'>Expand All</button>"
     $HTMLReport += "<button class='control-btn' onclick='collapseAllGroups()'>Collapse All</button>"
+    $HTMLReport += "<button class='control-btn' onclick='showHighRiskGroups()'>Show High Risk Only</button>"
     $HTMLReport += "<button class='control-btn' onclick='showAllGroups()'>Show All</button>"
     $HTMLReport += "</div>"
     
     # Interactive group tree
     $HTMLReport += "<div class='group-tree' id='group-tree'>"
     
-    # Sort groups by member count
-    $SortedGroups = $AuditResults.GroupNesting | Sort-Object MemberCount -Descending
+    # Sort groups by risk level and member count
+    $SortedGroups = $AuditResults.GroupNesting | Sort-Object @{Expression={
+        if ($_.NestingDepth -gt 2 -or $_.MemberCount -gt 500) { 1 }  # High risk
+        elseif ($_.NestingDepth -gt 1 -or $_.MemberCount -gt 100) { 2 }  # Medium risk  
+        else { 3 }  # Low risk
+    }}, MemberCount -Descending
     
     foreach ($Group in $SortedGroups) {
+        # Determine risk level
+        $RiskClass = "low-risk"
+        $RiskLevel = "Low"
+        if ($Group.NestingDepth -gt 2 -or $Group.MemberCount -gt 500) {
+            $RiskClass = "high-risk"
+            $RiskLevel = "High"
+        } elseif ($Group.NestingDepth -gt 1 -or $Group.MemberCount -gt 100) {
+            $RiskClass = "medium-risk" 
+            $RiskLevel = "Medium"
+        }
+        
         $HasNesting = $Group.NestedGroups -gt 0
         $ToggleClass = if ($HasNesting) { "group-toggle" } else { "group-item" }
-
-        $HTMLReport += "<div class='group-item'>"
+        
+        $HTMLReport += "<div class='group-item $RiskClass' data-risk='$RiskLevel'>"
         
         if ($HasNesting) {
             $HTMLReport += "<span class='$ToggleClass' onclick='toggleGroup(`"$($Group.SafeID)`")'>"
@@ -7063,7 +5554,7 @@ if ($AuditResults.GroupNesting -is [array]) {
             $HTMLReport += " | Nesting Depth: $($Group.NestingDepth)"
         }
         
-        $HTMLReport += "</span>"
+        $HTMLReport += " | Risk: <span class='$RiskClass'>$RiskLevel</span></span>"
         $HTMLReport += "</span>"
         
         if ($HasNesting -and -not [string]::IsNullOrEmpty($Group.NestedGroupNames)) {
@@ -7124,9 +5615,21 @@ if ($AuditResults.GroupNesting -is [array]) {
         });
     }
     
+    function showHighRiskGroups() {
+        var allGroups = document.querySelectorAll('.group-item[data-risk]');
+        
+        allGroups.forEach(function(group) {
+            if (group.getAttribute('data-risk') === 'High') {
+                group.style.display = 'block';
+            } else {
+                group.style.display = 'none';
+            }
+        });
+    }
+    
     function showAllGroups() {
-        var allGroups = document.querySelectorAll('.group-item');
-
+        var allGroups = document.querySelectorAll('.group-item[data-risk]');
+        
         allGroups.forEach(function(group) {
             group.style.display = 'block';
         });
@@ -7329,7 +5832,7 @@ if ($AuditResults.PrivilegedAccountMonitoring.AdminGroups) {
                     <td><strong>$($Group.GroupName)</strong></td>
                     <td>$($Group.MemberCount)</td>
                     <td>$($Group.LastModified)</td>
-                    <td>$InactiveCount</td>
+                    <td class="$(if ($InactiveCount -gt 0) { 'warning' } else { 'success' })">$InactiveCount</td>
                 </tr>
 "@
     }
@@ -7376,6 +5879,13 @@ if ($AuditResults.PrivilegedAccountMonitoring.ServiceAccounts) {
 $HTMLReport += @"
             </table>
         </div>
+    </div>
+"@
+
+
+$HTMLReport += @"
+            </table>
+        </div>
 
         <div class="subsection">
             <h3>Inactive Privileged Accounts (90+ days)</h3>
@@ -7392,16 +5902,16 @@ if ($AuditResults.PrivilegedAccountMonitoring.InactivePrivilegedAccounts -and $A
     foreach ($InactiveAccount in $AuditResults.PrivilegedAccountMonitoring.InactivePrivilegedAccounts) {
         $HTMLReport += @"
                 <tr>
-                    <td>$($InactiveAccount.User)</td>
+                    <td class="warning">$($InactiveAccount.User)</td>
                     <td>$($InactiveAccount.Group)</td>
                     <td>$($InactiveAccount.LastLogon)</td>
-                    <td>$($InactiveAccount.DaysInactive) days</td>
+                    <td class="warning">$($InactiveAccount.DaysInactive)</td>
                 </tr>
 "@
     }
 } else {
     $HTMLReport += @"
-                <tr><td colspan="4">No inactive privileged accounts found</td></tr>
+                <tr><td colspan="4" class="success">No inactive privileged accounts found</td></tr>
 "@
 }
 
@@ -7450,7 +5960,7 @@ if ($AuditResults.ObjectProtection.Error) {
     # Show unprotected objects in expandable sections
     if ($AuditResults.ObjectProtection.UnprotectedOUs -and $AuditResults.ObjectProtection.UnprotectedOUs.Count -gt 0) {
         $HTMLReport += @"
-        <div class="subsection">
+        <div class="warning">
             <h4>🚨 Unprotected Organizational Units ($($AuditResults.ObjectProtection.UnprotectedOUs.Count))</h4>
             <table>
                 <tr>
@@ -7478,7 +5988,7 @@ if ($AuditResults.ObjectProtection.Error) {
     
     if ($AuditResults.ObjectProtection.UnprotectedUsers -and $AuditResults.ObjectProtection.UnprotectedUsers.Count -gt 0) {
         $HTMLReport += @"
-        <div class="subsection">
+        <div class="error">
             <h4>🚨 Unprotected Critical Users ($($AuditResults.ObjectProtection.UnprotectedUsers.Count))</h4>
             <table>
                 <tr>
@@ -7509,7 +6019,7 @@ if ($AuditResults.ObjectProtection.Error) {
     
     if ($AuditResults.ObjectProtection.UnprotectedGroups -and $AuditResults.ObjectProtection.UnprotectedGroups.Count -gt 0) {
         $HTMLReport += @"
-        <div class="subsection">
+        <div class="error">
             <h4>🚨 Unprotected Critical Groups ($($AuditResults.ObjectProtection.UnprotectedGroups.Count))</h4>
             <table>
                 <tr>
@@ -7561,8 +6071,7 @@ if ($AuditResults.ObjectProtection.Error) {
     if ($AuditResults.ObjectProtection.Recommendations -and $AuditResults.ObjectProtection.Recommendations.Count -gt 0) {
         $HTMLReport += "<h3>Protection Recommendations</h3><div class='warning'><ul>"
         foreach ($Recommendation in $AuditResults.ObjectProtection.Recommendations) {
-            $SafeRecommendation = [System.Web.HttpUtility]::HtmlEncode($Recommendation)
-            $HTMLReport += "<li>$SafeRecommendation</li>"
+            $HTMLReport += "<li>$Recommendation</li>"
         }
         $HTMLReport += "</ul></div>"
     }
@@ -7580,7 +6089,81 @@ $HTMLReport += @"
         <p>System performance metrics, database health, and operational monitoring data.</p>
     </div>
 
+    <div class="section">
+        <h2>📊 DC Performance Metrics</h2>
+        <table>
+            <tr>
+                <th>Domain Controller</th>
+                <th>CPU Usage</th>
+                <th>Memory Usage</th>
+                <th>AD Database Size</th>
+                <th>Log File Size</th>
+                <th>LDAP Connections</th>
+            </tr>
+"@
 
+if ($AuditResults.DCPerformanceMetrics -and $AuditResults.DCPerformanceMetrics.Count -gt 0) {
+    foreach ($DC in $AuditResults.DCPerformanceMetrics) {
+        if ($DC.DomainController) {
+            $HTMLReport += @"
+                <tr>
+                    <td><strong>$($DC.DomainController)</strong></td>
+                    <td>$($DC.CPUUsage)</td>
+                    <td>$($DC.MemoryUsage)</td>
+                    <td>$($DC.ADDatabaseSize)</td>
+                    <td>$($DC.LogFileSize)</td>
+                    <td>$($DC.LDAPConnections)</td>
+                </tr>
+"@
+        }
+    }
+} else {
+    $HTMLReport += @"
+            <tr><td colspan="6">No performance metrics available or access denied</td></tr>
+"@
+}
+
+$HTMLReport += @"
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>🗄️ AD Database Health</h2>
+        <table>
+            <tr>
+                <th>Domain Controller</th>
+                <th>Database Size</th>
+                <th>Log Size</th>
+                <th>Free Space</th>
+                <th>Last Backup</th>
+                <th>Replication Errors</th>
+            </tr>
+"@
+
+if ($AuditResults.ADDatabaseHealth.DatabaseIntegrity -and $AuditResults.ADDatabaseHealth.DatabaseIntegrity.Count -gt 0) {
+    foreach ($DB in $AuditResults.ADDatabaseHealth.DatabaseIntegrity) {
+        $HasErrors = $DB.ReplicationErrors -and $DB.ReplicationErrors.Count -gt 0 -and $DB.ReplicationErrors[0] -ne "Unable to check replication status"
+        $HTMLReport += @"
+                <tr>
+                    <td><strong>$($DB.DomainController)</strong></td>
+                    <td>$($DB.DatabaseSize)</td>
+                    <td>$($DB.LogSize)</td>
+                    <td>$($DB.FreeLogSpace)</td>
+                    <td class="$(if ($DB.LastBackup -match 'No recent|Unable') { 'warning' } else { 'success' })">$($DB.LastBackup)</td>
+                    <td class="$(if ($HasErrors) { 'error' } else { 'success' })">$(if ($HasErrors) { $DB.ReplicationErrors.Count } else { 'None' })</td>
+                </tr>
+"@
+    }
+} else {
+    $HTMLReport += @"
+            <tr><td colspan="6">No database health information available</td></tr>
+"@
+}
+
+$HTMLReport += @"
+        </table>
+    </div>
+"@
 
 # Add Cloud Integration section
 $HTMLReport += @"
@@ -7602,7 +6185,7 @@ if ($AuditResults.AzureADConnectHealth) {
         <h2>☁️ Azure AD Connect Health</h2>
         <div class="subsection">
             <h3>Installation Status</h3>
-            <p><strong>Azure AD Connect Found:</strong> $([System.Web.HttpUtility]::HtmlEncode($AuditResults.AzureADConnectHealth.InstallationFound))</p>
+            <p><strong>Azure AD Connect Found:</strong> $($AuditResults.AzureADConnectHealth.InstallationFound)</p>
             
             <h3>Service Status</h3>
             <table>
@@ -7617,9 +6200,9 @@ if ($AuditResults.AzureADConnectHealth) {
         foreach ($Service in $AuditResults.AzureADConnectHealth.ServiceStatus) {
             $HTMLReport += @"
                 <tr>
-                    <td>$([System.Web.HttpUtility]::HtmlEncode($Service.ServiceName))</td>
-                    <td>$([System.Web.HttpUtility]::HtmlEncode($Service.Status))</td>
-                    <td>$([System.Web.HttpUtility]::HtmlEncode($Service.StartType))</td>
+                    <td>$($Service.ServiceName)</td>
+                    <td class="$(if ($Service.Status -eq 'Running') { 'success' } else { 'error' })">$($Service.Status)</td>
+                    <td>$($Service.StartType)</td>
                 </tr>
 "@
         }
@@ -7633,8 +6216,8 @@ if ($AuditResults.AzureADConnectHealth) {
             </table>
             
             <h3>Sync Information</h3>
-            <p><strong>Sync Status:</strong> $([System.Web.HttpUtility]::HtmlEncode($AuditResults.AzureADConnectHealth.SyncStatus))</p>
-            <p><strong>Connector Objects:</strong> $([System.Web.HttpUtility]::HtmlEncode($AuditResults.AzureADConnectHealth.ConnectorSpaceObjects))</p>
+            <p><strong>Sync Status:</strong> $($AuditResults.AzureADConnectHealth.SyncStatus)</p>
+            <p><strong>Connector Objects:</strong> $($AuditResults.AzureADConnectHealth.ConnectorSpaceObjects)</p>
         </div>
     </div>
 "@
@@ -7664,186 +6247,6 @@ if ($AuditResults.ConditionalAccessPolicies) {
     }
     
     $HTMLReport += @"
-        </div>
-    </div>
-"@
-}
-
-# Add SYSVOL and NTDS Integrity Analysis section if data exists
-if ($AuditResults.SysvolNtdsAnalysis) {
-    $HTMLReport += @"
-    <div class="section">
-        <h2>🛡️ SYSVOL & NTDS Integrity Analysis</h2>
-        <div class="subsection">
-            <h3>SYSVOL Health Checks</h3>
-"@
-
-    if ($AuditResults.SysvolNtdsAnalysis.SysvolChecks -and $AuditResults.SysvolNtdsAnalysis.SysvolChecks.Count -gt 0) {
-        $HTMLReport += @"
-            <table>
-                <tr><th>Domain Controller</th><th>SYSVOL Access</th><th>NETLOGON Access</th><th>Size (MB)</th><th>Policy Count</th><th>Replication Status</th></tr>
-"@
-        foreach ($Check in $AuditResults.SysvolNtdsAnalysis.SysvolChecks) {
-            $SysvolStatus = if ($Check.SysvolAccessible -eq $true) { "<span class='status success'>✓ Accessible</span>" } else { "<span class='status error'>✗ Not Accessible</span>" }
-            $NetlogonStatus = if ($Check.NetlogonAccessible -eq $true) { "<span class='status success'>✓ Accessible</span>" } else { "<span class='status error'>✗ Not Accessible</span>" }
-            $ReplicationStatus = if ($Check.ReplicationStatus -eq "Healthy") { "<span class='status success'>Healthy</span>" } else { "<span class='status warning'>$($Check.ReplicationStatus)</span>" }
-
-            $HTMLReport += @"
-                <tr>
-                    <td><strong>$($Check.DomainController)</strong></td>
-                    <td>$SysvolStatus</td>
-                    <td>$NetlogonStatus</td>
-                    <td>$($Check.SysvolSizeMB)</td>
-                    <td>$($Check.PolicyCount)</td>
-                    <td>$ReplicationStatus</td>
-                </tr>
-"@
-        }
-        $HTMLReport += "</table>"
-
-        # SYSVOL Issues Summary
-        $SysvolIssues = $AuditResults.SysvolNtdsAnalysis.SysvolChecks | Where-Object {
-            $_.SysvolAccessible -eq $false -or $_.NetlogonAccessible -eq $false -or $_.ReplicationStatus -ne "Healthy"
-        }
-
-        if ($SysvolIssues.Count -gt 0) {
-            $HTMLReport += @"
-            <div class="warning">
-                <h4>⚠️ SYSVOL Issues Detected</h4>
-                <ul>
-"@
-            foreach ($Issue in $SysvolIssues) {
-                if ($Issue.SysvolAccessible -eq $false) {
-                    $HTMLReport += "<li><strong>$($Issue.DomainController):</strong> SYSVOL folder not accessible</li>"
-                }
-                if ($Issue.NetlogonAccessible -eq $false) {
-                    $HTMLReport += "<li><strong>$($Issue.DomainController):</strong> NETLOGON share not accessible</li>"
-                }
-                if ($Issue.ReplicationStatus -ne "Healthy") {
-                    $HTMLReport += "<li><strong>$($Issue.DomainController):</strong> SYSVOL replication status: $($Issue.ReplicationStatus)</li>"
-                }
-            }
-            $HTMLReport += @"
-                </ul>
-            </div>
-"@
-        }
-    } else {
-        $HTMLReport += "<p>Unable to perform SYSVOL health checks - insufficient permissions or DC connectivity issues</p>"
-    }
-
-    $HTMLReport += @"
-        </div>
-        <div class="subsection">
-            <h3>NTDS.dit Database Integrity</h3>
-"@
-
-    if ($AuditResults.SysvolNtdsAnalysis.NtdsChecks -and $AuditResults.SysvolNtdsAnalysis.NtdsChecks.Count -gt 0) {
-        $HTMLReport += @"
-            <table>
-                <tr><th>Domain Controller</th><th>Database Access</th><th>Database Size</th><th>Integrity Status</th><th>Transaction Logs</th><th>Last Backup</th></tr>
-"@
-        foreach ($Check in $AuditResults.SysvolNtdsAnalysis.NtdsChecks) {
-            $DatabaseStatus = if ($Check.DatabaseAccessible -eq $true) { "<span class='status success'>✓ Accessible</span>" } else { "<span class='status error'>✗ Not Accessible</span>" }
-            $IntegrityStatus = if ($Check.IntegrityStatus -eq "Healthy") { "<span class='status success'>Healthy</span>" } elseif ($Check.IntegrityStatus -eq "Warning") { "<span class='status warning'>Warning</span>" } else { "<span class='status error'>$($Check.IntegrityStatus)</span>" }
-
-            $HTMLReport += @"
-                <tr>
-                    <td><strong>$($Check.DomainController)</strong></td>
-                    <td>$DatabaseStatus</td>
-                    <td>$($Check.DatabaseSizeGB) GB</td>
-                    <td>$IntegrityStatus</td>
-                    <td>$($Check.TransactionLogCount) files</td>
-                    <td>$($Check.LastBackupAge)</td>
-                </tr>
-"@
-        }
-        $HTMLReport += "</table>"
-
-        # NTDS Issues Summary
-        $NtdsIssues = $AuditResults.SysvolNtdsAnalysis.NtdsChecks | Where-Object {
-            $_.DatabaseAccessible -eq $false -or $_.IntegrityStatus -ne "Healthy"
-        }
-
-        if ($NtdsIssues.Count -gt 0) {
-            $HTMLReport += @"
-            <div class="error">
-                <h4>🚨 NTDS Database Issues Detected</h4>
-                <ul>
-"@
-            foreach ($Issue in $NtdsIssues) {
-                if ($Issue.DatabaseAccessible -eq $false) {
-                    $HTMLReport += "<li><strong>$($Issue.DomainController):</strong> NTDS.dit database file not accessible</li>"
-                }
-                if ($Issue.IntegrityStatus -ne "Healthy") {
-                    $HTMLReport += "<li><strong>$($Issue.DomainController):</strong> Database integrity status: $($Issue.IntegrityStatus)</li>"
-                }
-            }
-            $HTMLReport += @"
-                </ul>
-            </div>
-"@
-        }
-    } else {
-        $HTMLReport += "<p>Unable to perform NTDS integrity checks - insufficient permissions or DC connectivity issues</p>"
-    }
-
-    # Overall Health Summary
-    $SysvolHealthy = $AuditResults.SysvolNtdsAnalysis.Summary.SysvolHealthy
-    $NtdsHealthy = $AuditResults.SysvolNtdsAnalysis.Summary.NtdsHealthy
-
-    $HTMLReport += @"
-        </div>
-        <div class="subsection">
-            <h3>Overall Health Summary</h3>
-            <div class="info-grid">
-                <div class="info-item">
-                    <strong>SYSVOL Health:</strong>
-"@
-
-    if ($SysvolHealthy) {
-        $HTMLReport += "<span class='status success'>✓ Healthy</span>"
-    } else {
-        $HTMLReport += "<span class='status error'>✗ Issues Detected</span>"
-    }
-
-    $HTMLReport += @"
-                </div>
-                <div class="info-item">
-                    <strong>NTDS Database Health:</strong>
-"@
-
-    if ($NtdsHealthy) {
-        $HTMLReport += "<span class='status success'>✓ Healthy</span>"
-    } else {
-        $HTMLReport += "<span class='status error'>✗ Issues Detected</span>"
-    }
-
-    $HTMLReport += @"
-                </div>
-            </div>
-        </div>
-
-        <div class="subsection">
-            <h3>Recommendations</h3>
-            <div class="info">
-                <h4>🔧 SYSVOL Maintenance</h4>
-                <ul>
-                    <li>Ensure SYSVOL folder is accessible on all domain controllers</li>
-                    <li>Verify NETLOGON share is available and properly configured</li>
-                    <li>Monitor SYSVOL replication status regularly</li>
-                    <li>Check for DFSR vs FRS replication mode consistency</li>
-                </ul>
-
-                <h4>🔧 NTDS Database Maintenance</h4>
-                <ul>
-                    <li>Perform regular offline database integrity checks using esentutl</li>
-                    <li>Monitor database size growth and plan for capacity</li>
-                    <li>Implement regular AD database backups</li>
-                    <li>Monitor transaction log accumulation</li>
-                    <li>Consider database defragmentation during maintenance windows</li>
-                </ul>
-            </div>
         </div>
     </div>
 "@
@@ -7912,7 +6315,7 @@ if ($AuditResults.PkiInfrastructure) {
         }
         $HTMLReport += "</table>"
     }
-
+    
     # Certificate Store Information
     if ($AuditResults.PkiInfrastructure.CaCertificates -and $AuditResults.PkiInfrastructure.CaCertificates.Count -gt 0) {
         $HTMLReport += @"
@@ -7976,6 +6379,123 @@ $HTMLReport += @"
     <!-- ============================================ -->
 
 
+    <div class="section">
+        <h2>📈 Summary & Recommendations</h2>
+        <h3>Key Findings</h3>
+        <ul>
+"@
+
+# Generate summary recommendations
+$Recommendations = @()
+
+if ($AuditResults.DomainControllers -is [array]) {
+    $OfflineDCs = $AuditResults.DomainControllers | Where-Object {$_.Connectivity -eq "Offline"}
+    if ($OfflineDCs.Count -gt 0) {
+        $Recommendations += "Critical: $($OfflineDCs.Count) domain controller(s) are offline"
+    }
+}
+
+if ($AuditResults.ReplicationHealth -is [array] -and $AuditResults.ReplicationHealth.Count -gt 0) {
+    $Recommendations += "Warning: Active Directory replication issues detected"
+}
+
+if ($AuditResults.SecurityFindings -is [array] -and $AuditResults.SecurityFindings.Count -gt 0) {
+    $Recommendations += "Security: $($AuditResults.SecurityFindings.Count) security findings require attention"
+}
+
+if ($AuditResults.AccountsAnalysis.Users.PasswordNeverExpires -gt 0) {
+    $Recommendations += "Security: $($AuditResults.AccountsAnalysis.Users.PasswordNeverExpires) accounts have non-expiring passwords"
+}
+
+if ($AuditResults.AccountsAnalysis.Users.InactiveUsers90Days -gt 0) {
+    $Recommendations += "Cleanup: $($AuditResults.AccountsAnalysis.Users.InactiveUsers90Days) users inactive for 90+ days"
+}
+
+if ($AuditResults.AccountsAnalysis.Computers.InactiveComputers90Days -gt 0) {
+    $Recommendations += "Cleanup: $($AuditResults.AccountsAnalysis.Computers.InactiveComputers90Days) computers inactive for 90+ days"
+}
+
+# Add privileged account monitoring recommendations
+if ($AuditResults.PrivilegedAccountMonitoring.Recommendations) {
+    foreach ($Recommendation in $AuditResults.PrivilegedAccountMonitoring.Recommendations) {
+        $Recommendations += "Privileged Accounts: $Recommendation"
+    }
+}
+
+# Add AD database health recommendations
+if ($AuditResults.ADDatabaseHealth.Recommendations) {
+    foreach ($Recommendation in $AuditResults.ADDatabaseHealth.Recommendations) {
+        $Recommendations += "Database Health: $Recommendation"
+    }
+}
+
+# Add schema architecture recommendations
+if ($AuditResults.SchemaArchitecture.Recommendations) {
+    foreach ($Recommendation in $AuditResults.SchemaArchitecture.Recommendations) {
+        $Recommendations += "Schema Architecture: $Recommendation"
+    }
+}
+
+# Add object protection recommendations
+if ($AuditResults.ObjectProtection.Recommendations) {
+    foreach ($Recommendation in $AuditResults.ObjectProtection.Recommendations) {
+        $Recommendations += "Object Protection: $Recommendation"
+    }
+}
+
+# Add Azure AD Connect recommendations
+if ($AuditResults.AzureADConnectHealth.Recommendations) {
+    foreach ($Recommendation in $AuditResults.AzureADConnectHealth.Recommendations) {
+        $Recommendations += "Azure AD Connect: $Recommendation"
+    }
+}
+
+# Add Conditional Access recommendations
+if ($AuditResults.ConditionalAccessPolicies.Recommendations) {
+    foreach ($Recommendation in $AuditResults.ConditionalAccessPolicies.Recommendations) {
+        $Recommendations += "Conditional Access: $Recommendation"
+    }
+}
+
+if ($AuditResults.PkiInfrastructure.Recommendations) {
+    foreach ($Recommendation in $AuditResults.PkiInfrastructure.Recommendations) {
+        $Recommendations += "PKI Infrastructure: $Recommendation"
+    }
+}
+
+
+if ($Recommendations.Count -eq 0) {
+    $Recommendations += "No critical issues detected in this audit"
+}
+
+foreach ($Rec in $Recommendations) {
+    $HTMLReport += "<li>$Rec</li>"
+}
+
+$EndTime = Get-Date
+$Duration = $EndTime - $StartTime
+
+$HTMLReport += @"
+        </ul>
+        
+        <h3>General Recommendations</h3>
+        <ul>
+            <li>Regularly monitor domain controller health and replication status</li>
+            <li>Implement least privilege access principles for administrative accounts</li>
+            <li>Enable advanced security features like SMB signing and disable legacy protocols</li>
+            <li>Regularly audit and clean up inactive user and computer accounts</li>
+            <li>Monitor privileged group memberships and implement just-in-time access</li>
+            <li>Review and optimize Group Policy structure and inheritance</li>
+            <li>Implement proper network segmentation and protocol security</li>
+            <li>Enable comprehensive audit logging and monitoring</li>
+        </ul>
+        
+        <h3>Audit Information</h3>
+        <p><strong>Audit Duration:</strong> $(if ($Duration) { $Duration.ToString('mm\:ss') } else { 'N/A' })</p>
+        <p><strong>Generated By:</strong> $($env:USERNAME)@$($env:COMPUTERNAME)</p>
+        <p><strong>Script Version:</strong> 1.0</p>
+    </div>
+    </div>
 
     <!-- ============================================ -->
     <!-- 📋 EXECUTIVE SUMMARY & RECOMMENDATIONS -->
@@ -8075,7 +6595,7 @@ foreach ($Recommendation in $AllRecommendations) {
 $HTMLReport += @"
             </ul>
         </div>
-
+        
         <div class="warning">
             <h3>🔄 Ongoing Maintenance</h3>
             <ul>
@@ -8085,7 +6605,7 @@ $HTMLReport += @"
                 <li><strong>Annually:</strong> Comprehensive security assessment and schema review</li>
             </ul>
         </div>
-
+        
         <div class="controls-panel">
             <h4>📊 Implementation Priority</h4>
             <p><strong>High Priority:</strong> Address all critical findings listed above immediately</p>
@@ -8093,97 +6613,7 @@ $HTMLReport += @"
             <p><strong>Low Priority:</strong> Establish ongoing maintenance schedule</p>
         </div>
     </div>
-"@
 
-$HTMLReport += @"
-    <!-- Bootstrap JS Bundle -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-    <!-- Chart.js Implementation -->
-    <script>
-        // Account Distribution Pie Chart
-        const accountCtx = document.getElementById('accountChart').getContext('2d');
-        new Chart(accountCtx, {
-            type: 'pie',
-            data: {
-                labels: ['Active Users', 'Inactive Users', 'Computer Accounts', 'Service Accounts'],
-                datasets: [{
-                    data: [150, 25, 75, 10],  // Placeholder values - Active, Inactive, Computer, Service accounts
-                    backgroundColor: [
-                        '#28a745',
-                        '#ffc107',
-                        '#17a2b8',
-                        '#6f42c1'
-                    ],
-                    borderWidth: 2,
-                    borderColor: '#fff'
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        position: 'bottom'
-                    },
-                    title: {
-                        display: true,
-                        text: 'Account Distribution'
-                    }
-                }
-            }
-        });
-
-        // Infrastructure Health Bar Chart
-        const infraCtx = document.getElementById('infraChart').getContext('2d');
-        new Chart(infraCtx, {
-            type: 'bar',
-            data: {
-                labels: ['Domain Controllers', 'Replication Health', 'DNS Health', 'FSMO Roles'],
-                datasets: [{
-                    label: 'Health Score (%)',
-                    data: [
-                        85,  // DC Health - placeholder value
-                        90,  // Replication Health - placeholder value
-                        95,  // DNS Health - placeholder value
-                        100  // FSMO Roles - placeholder value
-                    ],
-                    backgroundColor: [
-                        '#28a745',
-                        '#17a2b8',
-                        '#ffc107',
-                        '#6f42c1'
-                    ],
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        max: 100,
-                        ticks: {
-                            callback: function(value) {
-                                return value + '%';
-                            }
-                        }
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: false
-                    },
-                    title: {
-                        display: true,
-                        text: 'Infrastructure Health Overview'
-                    }
-                }
-            }
-        });
-    </script>
-"@
-
-$HTMLReport += @"
 </body>
 </html>
 "@
