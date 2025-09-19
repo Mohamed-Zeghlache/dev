@@ -1,8 +1,14 @@
 {
   "permissions": {
     "allow": [
+<<<<<<< HEAD
       "Bash(powershell:*)",
       "Bash(tail:*)"
+=======
+      "Bash(Get-Module -ListAvailable PSScriptAnalyzer)",
+      "Bash(pwsh:*)",
+      "Bash(wc:*)"
+>>>>>>> fe9be1065bea881d566fc738898d8d920b3f9ae2
     ],
     "deny": [],
     "ask": []
