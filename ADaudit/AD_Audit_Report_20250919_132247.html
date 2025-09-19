@@ -1,0 +1,2176 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Active Directory Audit Report</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
+            margin: 0; padding: 20px 40px; 
+            background: linear-gradient(to bottom right, #f8fafc 0%, #e2e8f0 100%);
+            min-height: 100vh; 
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 0 20px;
+        }
+        
+        /* Header styling - cleaner and more professional */
+        .header { 
+            background: white;
+            color: #1e293b; 
+            padding: 40px 50px; 
+            border-radius: 12px; 
+            margin-bottom: 32px; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-left: 4px solid #3b82f6;
+        }
+        .header h1 { margin: 0 0 20px 0; font-size: 2rem; font-weight: 700; color: #1e293b; }
+        .header p { margin: 6px 0; color: #64748b; font-size: 0.875rem; }
+        
+        /* Section styling - reduced shadows and better spacing */
+        .section { 
+            background: white;
+            margin: 24px 0; 
+            padding: 32px 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            border: 1px solid #e2e8f0;
+        }
+        .section h2 { 
+            color: #1e293b; 
+            border-bottom: 2px solid #e2e8f0; 
+            padding-bottom: 16px; 
+            margin-bottom: 28px; 
+            font-weight: 600; 
+            font-size: 1.375rem;
+        }
+        .section h3 {
+            color: #334155;
+            margin-top: 32px;
+            margin-bottom: 20px;
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        .section h4 {
+            color: #374151;
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .section p {
+            margin-bottom: 16px;
+            color: #4b5563;
+        }
+        
+        /* Alert boxes - softer colors and better contrast */
+        .warning { 
+            background: #fef3c7; 
+            border: 1px solid #f59e0b; 
+            color: #92400e;
+            padding: 20px 24px; 
+            border-radius: 8px; 
+            margin: 24px 0;
+            border-left: 4px solid #f59e0b;
+            font-size: 0.875rem;
+        }
+        .error { 
+            background: #fee2e2; 
+            border: 1px solid #ef4444; 
+            color: #991b1b;
+            padding: 20px 24px; 
+            border-radius: 8px; 
+            margin: 24px 0;
+            border-left: 4px solid #ef4444;
+            font-size: 0.875rem;
+        }
+        .success {
+            background: #dcfce7;
+            border: 1px solid #22c55e;
+            color: #166534;
+            padding: 20px 24px;
+            border-radius: 8px;
+            margin: 24px 0;
+            border-left: 4px solid #22c55e;
+            font-size: 0.875rem;
+        }
+        .info {
+            background: #e0f2fe;
+            border: 1px solid #0284c7;
+            color: #0c4a6e;
+            padding: 20px 24px;
+            border-radius: 8px;
+            margin: 24px 0;
+            border-left: 4px solid #0284c7;
+            font-size: 0.875rem;
+        }
+
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        th, td { border: none; padding: 12px 15px; text-align: left; }
+        th { background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); color: white; font-weight: 500; }
+        tr:nth-child(even) { background-color: rgba(52,152,219,0.05); }
+        
+        /* Status-specific row styling */
+        .table .table-success {
+            background-color: #d4edda !important;
+            color: #155724;
+        }
+        
+        .table .table-warning {
+            background-color: #fff3cd !important;
+            color: #856404;
+        }
+        
+        .table .table-danger {
+            background-color: #f8d7da !important;
+            color: #721c24;
+        }
+        
+        .table .table-info {
+            background-color: #d1ecf1 !important;
+            color: #0c5460;
+        }
+
+        /* Direct info class for table rows */
+        tr.info {
+            background-color: #e0f2fe !important;
+            color: #0c4a6e;
+        }
+
+        tr.info td {
+            background-color: #e0f2fe !important;
+            color: #0c4a6e;
+        }
+
+        /* Info header styling */
+        h5.info {
+            color: #0c4a6e;
+            background-color: #e0f2fe;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border-left: 3px solid #0284c7;
+            margin: 16px 0 8px 0;
+        }
+        
+        .table .table-primary {
+            background-color: #cce7ff !important;
+            color: #004085;
+        }
+
+        /* Table cell specific status styling (without heavy padding) */
+        td.success {
+            background-color: #dcfce7 !important;
+            color: #166534;
+            font-weight: 500;
+        }
+
+        td.warning {
+            background-color: #fef3c7 !important;
+            color: #92400e;
+            font-weight: 500;
+        }
+
+        td.error {
+            background-color: #fee2e2 !important;
+            color: #991b1b;
+            font-weight: 500;
+        }
+
+        /* Badge-like status indicators - subtle styling */
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            line-height: 1.2;
+            text-align: center;
+            white-space: nowrap;
+            vertical-align: baseline;
+            border-radius: 12px;
+            border: 1px solid;
+        }
+
+        .badge-success {
+            color: #166534;
+            background-color: transparent;
+            border-color: #166534;
+        }
+
+        .badge-warning {
+            color: #92400e;
+            background-color: transparent;
+            border-color: #92400e;
+        }
+
+        .badge-danger {
+            color: #991b1b;
+            background-color: transparent;
+            border-color: #991b1b;
+        }
+
+        .badge-info {
+            color: #0c5460;
+            background-color: transparent;
+            border-color: #0c5460;
+        }
+
+        .badge-primary {
+            color: #004085;
+            background-color: transparent;
+            border-color: #004085;
+        }
+        
+        .badge-secondary {
+            color: #fff;
+            background-color: #6c757d;
+        }
+        
+        /* Metric cards - more subtle and professional */
+        .metric { 
+            display: inline-block; 
+            margin: 8px; 
+            padding: 16px; 
+            background: white; 
+            border-radius: 8px; 
+            text-align: center; 
+            min-width: 120px; 
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+            transition: all 0.2s ease; 
+            position: relative;
+        }
+        .metric:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .metric .number { 
+            font-size: 1.75rem; 
+            font-weight: 700; 
+            color: #1e293b; 
+            margin-bottom: 10px; 
+        }
+        .metric .label { 
+            font-size: 0.8rem; 
+            color: #64748b; 
+            font-weight: 500;
+            line-height: 1.3;
+        }
+        
+        /* Export button styling */
+        .export-btn { 
+            position: absolute; 
+            top: 8px; 
+            right: 8px; 
+            background: #3b82f6; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            width: 28px; 
+            height: 28px; 
+            font-size: 12px; 
+            cursor: pointer; 
+            opacity: 0.7; 
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .export-btn:hover { 
+            background: #2563eb; 
+            opacity: 1;
+            transform: scale(1.1);
+        }
+        
+        /* Tree and toggle styling */
+        .ou-tree, .group-tree { margin: 20px 0; }
+        .ou-item, .group-item { margin: 2px 0; }
+        .ou-toggle, .group-toggle { 
+            cursor: pointer; 
+            user-select: none; 
+            padding: 8px 12px; 
+            border-radius: 6px; 
+            transition: all 0.2s ease; 
+            display: inline-block;
+            color: #374151;
+        }
+        .ou-toggle:hover, .group-toggle:hover { 
+            background: #f3f4f6;
+            color: #1f2937;
+        }
+        .ou-toggle::before, .group-toggle::before { 
+            content: '▶'; 
+            display: inline-block; 
+            width: 12px; 
+            color: #6b7280; 
+            font-size: 10px; 
+            transition: transform 0.2s ease; 
+        }
+        .ou-toggle.expanded::before, .group-toggle.expanded::before { 
+            content: '▼'; 
+            transform: rotate(0deg); 
+        }
+        .ou-children, .group-children { 
+            margin-left: 20px; 
+            display: none; 
+            border-left: 2px solid #e5e7eb; 
+            padding-left: 12px; 
+            margin-top: 4px; 
+        }
+        .ou-children.show, .group-children.show { 
+            display: block; 
+            animation: fadeIn 0.2s ease; 
+        }
+        @keyframes fadeIn { 
+            from { opacity: 0; transform: translateY(-4px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+        
+        /* Stats and level styling */
+        .ou-stats, .group-stats { 
+            font-size: 0.75rem; 
+            color: #6b7280; 
+            margin-left: 8px; 
+            background: #f3f4f6; 
+            padding: 2px 8px; 
+            border-radius: 12px; 
+            display: inline-block; 
+        }
+        .ou-level-0 { margin-left: 0px; }
+        .ou-level-1 { margin-left: 16px; }
+        .ou-level-2 { margin-left: 32px; }
+        .ou-level-3 { margin-left: 48px; }
+        .ou-level-4 { margin-left: 64px; }
+        .ou-level-5 { margin-left: 80px; }
+        
+        /* Group tree styling */
+        .group-tree { 
+            max-height: 500px; 
+            overflow-y: auto; 
+            border: 1px solid #e5e7eb; 
+            padding: 16px; 
+            border-radius: 8px; 
+            background: #fafafa; 
+        }
+        .group-tree::-webkit-scrollbar { width: 6px; }
+        .group-tree::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+        .group-tree::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .group-tree::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .group-name { font-weight: 600; color: #374151; }
+        .group-scope { 
+            font-size: 0.75rem; 
+            color: #6b7280; 
+            margin-left: 6px; 
+            background: #e5e7eb; 
+            padding: 2px 6px; 
+            border-radius: 8px; 
+        }
+        
+        /* Risk level styling */
+        .high-risk { color: #dc2626; font-weight: 600; }
+        .medium-risk { color: #d97706; font-weight: 500; }
+        .low-risk { color: #059669; font-weight: 500; }
+        
+        /* Controls panel */
+        .controls-panel { 
+            margin: 28px 0; 
+            padding: 24px; 
+            background: #f8fafc; 
+            border-radius: 8px; 
+            border: 1px solid #e2e8f0; 
+        }
+        .control-btn { 
+            margin: 6px; 
+            padding: 10px 20px; 
+            background: #3b82f6; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: 500; 
+            transition: all 0.2s ease;
+            font-size: 0.8rem;
+        }
+        .control-btn:hover { 
+            background: #2563eb; 
+            transform: translateY(-1px);
+        }
+        .control-btn:active { transform: translateY(0px); }
+        
+        /* Template styling */
+        .template-list { margin: 12px 0; }
+        .template-tag { 
+            display: inline-block; 
+            margin: 4px 6px 4px 0; 
+            padding: 6px 12px; 
+            background: #eff6ff; 
+            border: 1px solid #3b82f6; 
+            border-radius: 16px; 
+            font-size: 0.75rem; 
+            color: #1e40af; 
+            font-weight: 500; 
+            transition: all 0.2s ease; 
+        }
+        .template-tag:hover { 
+            background: #dbeafe;
+            box-shadow: 0 2px 4px rgba(59, 130, 246, 0.1);
+        }
+        
+        /* Status indicators */
+        .status-indicator { 
+            display: flex; 
+            align-items: center; 
+            margin: 12px 0; 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            font-weight: 500; 
+        }
+        .status-indicator.success { 
+            background: #dcfce7; 
+            border: 1px solid #22c55e; 
+            color: #166534; 
+        }
+        .status-indicator.warning { 
+            background: #fef3c7; 
+            border: 1px solid #f59e0b; 
+            color: #92400e; 
+        }
+        .status-indicator .status-icon { margin-right: 8px; font-size: 16px; }
+        .status.success {
+            color: #166534;
+            font-weight: 600;
+            border-left: 2px solid #166534;
+            padding-left: 6px;
+        }
+        .status.warning {
+            color: #92400e;
+            font-weight: 600;
+            border-left: 2px solid #92400e;
+            padding-left: 6px;
+        }
+        .status.error {
+            color: #991b1b;
+            font-weight: 600;
+            border-left: 2px solid #991b1b;
+            padding-left: 6px;
+        }
+        
+        .info-grid { margin: 12px 0; }
+        .info-grid p { margin: 6px 0; }
+        
+        /* Responsive design improvements */
+        @media (max-width: 768px) {
+            body { padding: 12px 16px; font-size: 13px; }
+            .container { max-width: 100%; padding: 0 10px; }
+            .header { padding: 24px 20px; }
+            .header h1 { font-size: 1.5rem; }
+            .section { padding: 20px 24px; margin: 16px 0; }
+            .metric { min-width: 110px; margin: 6px; padding: 14px; }
+            .metric .number { font-size: 1.5rem; }
+            .metric .label { font-size: 0.75rem; }
+            table { font-size: 0.8rem; }
+            th, td { padding: 10px 14px; }
+            .section h2 { font-size: 1.25rem; }
+            .section h3 { font-size: 1rem; }
+        }
+        
+        @media (max-width: 480px) {
+            body { padding: 8px 12px; }
+            .header { padding: 20px 16px; }
+            .section { padding: 16px 20px; }
+            .metric { min-width: 90px; margin: 4px; padding: 12px; }
+        }
+        
+        /* Status indicators with left border styling - more subtle and professional */
+        .status-online {
+            border-left: 4px solid #10b981 !important;
+            background-color: rgba(16, 185, 129, 0.05) !important;
+            padding-left: 12px !important;
+        }
+        .status-warning {
+            border-left: 4px solid #f59e0b !important;
+            background-color: rgba(245, 158, 11, 0.05) !important;
+            padding-left: 12px !important;
+        }
+        .status-error {
+            border-left: 4px solid #ef4444 !important;
+            background-color: rgba(239, 68, 68, 0.05) !important;
+            padding-left: 12px !important;
+        }
+        .status-unknown {
+            border-left: 4px solid #6b7280 !important;
+            background-color: rgba(107, 114, 128, 0.05) !important;
+            padding-left: 12px !important;
+        }
+
+        /* DNS Table specific styles */
+        .table-responsive {
+            overflow-x: auto;
+            margin-bottom: 1rem;
+        }
+
+        .dns-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            background: white;
+        }
+
+        .dns-table th {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            font-weight: 500;
+            padding: 12px 15px;
+            text-align: left;
+            border: none;
+        }
+
+        .dns-table td {
+            padding: 12px 15px;
+            border: none;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .dns-table tr:nth-child(even) {
+            background-color: rgba(52,152,219,0.03);
+        }
+
+        .dns-table tr:hover {
+            background-color: rgba(52,152,219,0.08);
+        }
+
+        .dns-table .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .dns-table .status.success {
+            color: #166534;
+            font-weight: 600;
+            border-left: 3px solid #166534;
+            padding-left: 8px;
+        }
+
+        .dns-table .status.warning {
+            color: #92400e;
+            font-weight: 600;
+            border-left: 3px solid #92400e;
+            padding-left: 8px;
+        }
+
+        .dns-table .status.error {
+            color: #991b1b;
+            font-weight: 600;
+            border-left: 3px solid #991b1b;
+            padding-left: 8px;
+        }
+
+        @media (max-width: 768px) {
+            .dns-table {
+                font-size: 0.875rem;
+            }
+
+            .dns-table th,
+            .dns-table td {
+                padding: 8px 10px;
+            }
+        }
+
+        .fsmo-summary { 
+            margin-top: 16px; 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            font-weight: 500;
+        }
+    </style>
+    <script>
+        function exportToCSV(data, filename) {
+            // Function to properly escape CSV fields
+            function escapeCSVField(field) {
+                if (field === null || field === undefined) {
+                    return '';
+                }
+                const stringField = String(field);
+                // If field contains comma, quotes, or newlines, wrap in quotes and escape internal quotes
+                if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n') || stringField.includes('\r')) {
+                    return '"' + stringField.replace(/"/g, '""') + '"';
+                }
+                return stringField;
+            }
+            
+            const csvContent = "data:text/csv;charset=utf-8," + 
+                data.map(row => row.map(field => escapeCSVField(field)).join(",")).join("\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        function exportUserStats() {
+            const userStats = [
+                ["Metric", "Count"],
+                ["Total Users", ""],
+                ["Enabled Users", ""],
+                ["Disabled Users", ""],
+                ["Password Never Expires", ""],
+                ["Inactive 90+ Days", ""],
+                ["Locked Out Users", ""]
+            ];
+            exportToCSV(userStats, "user_statistics.csv");
+        }
+        
+        function exportComputerStats() {
+            const computerStats = [
+                ["Metric", "Count"],
+                ["Total Computers", ""],
+                ["Enabled Computers", ""],
+                ["Disabled Computers", ""],
+                ["Windows Servers", ""],
+                ["Windows Workstations", ""],
+                ["Inactive 90+ Days", ""]
+            ];
+            exportToCSV(computerStats, "computer_statistics.csv");
+        }
+        
+        // Individual metric export functions
+        function exportEnabledUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Password Last Set"],
+
+            ];
+            exportToCSV(data, "enabled_users.csv");
+        }
+        
+        function exportDisabledUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Password Last Set"],
+
+            ];
+            exportToCSV(data, "disabled_users.csv");
+        }
+        
+        function exportPasswordNeverExpiresUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Password Last Set", "Enabled"],
+
+            ];
+            exportToCSV(data, "password_never_expires_users.csv");
+        }
+        
+        function exportInactiveUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Enabled"],
+
+            ];
+            exportToCSV(data, "inactive_users_90days.csv");
+        }
+        
+        function exportLockedOutUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Account Lockout Time", "Last Logon"],
+
+            ];
+            exportToCSV(data, "locked_out_users.csv");
+        }
+        
+        function exportEnabledComputers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon"],
+
+            ];
+            exportToCSV(data, "enabled_computers.csv");
+        }
+        
+        function exportDisabledComputers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon"],
+
+            ];
+            exportToCSV(data, "disabled_computers.csv");
+        }
+        
+        function exportInactiveComputers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon"],
+
+            ];
+            exportToCSV(data, "inactive_computers_90days.csv");
+        }
+        
+        function exportWindowsServers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon", "Enabled"],
+
+            ];
+            exportToCSV(data, "windows_servers.csv");
+        }
+        
+        function exportWindowsWorkstations() {
+            const data = [
+                ["Name", "Operating System", "Last Logon", "Enabled"],
+
+            ];
+            exportToCSV(data, "windows_workstations.csv");
+        }
+        
+        function exportTotalUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Enabled", "Last Logon", "Password Last Set", "Password Never Expires", "Locked Out"],
+
+            ];
+            exportToCSV(data, "total_users.csv");
+        }
+        
+        function exportTotalComputers() {
+            const data = [
+                ["Name", "Operating System", "Enabled", "Last Logon", "Type"],
+
+            ];
+            exportToCSV(data, "total_computers.csv");
+        }
+    </script>
+</head>
+<body class="bg-light">
+    <div class="container-fluid">
+        <!-- Header Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-primary text-white">
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h1 class="h3 mb-0">
+                                    <i class="bi bi-shield-check me-2"></i>
+                                    Active Directory Audit Report
+                                </h1>
+                            </div>
+                            <div class="col-md-4 text-md-end">
+                                <small class="opacity-75">
+                                    <i class="bi bi-calendar3 me-1"></i>
+                                    Generated: 2025-09-19 13:22:54
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body bg-gradient">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center mb-2">
+                                    <i class="bi bi-building text-primary me-2"></i>
+                                    <strong class="me-2">Domain:</strong>
+                                    <span class="badge bg-light text-dark">Error retrieving domain</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center mb-2">
+                                    <i class="bi bi-diagram-3 text-success me-2"></i>
+                                    <strong class="me-2">Forest:</strong>
+                                    <span class="badge bg-light text-dark">Error retrieving forest</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Dashboard Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-light">
+                        <h4 class="mb-0">
+                            <i class="bi bi-graph-up text-primary me-2"></i>
+                            Audit Overview & Key Metrics
+                        </h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <!-- Domain Controllers Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-primary bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">Domain Controllers</h6>
+                                                <h2 class="mb-0" id="dcCount">1</h2>
+                                                <span class="small">Total DCs Found</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-server" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- User Accounts Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-success bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">User Accounts</h6>
+                                                <h2 class="mb-0" id="userCount">0</h2>
+                                                <span class="small">Active Users</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-people" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Computer Accounts Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-info bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">Computer Accounts</h6>
+                                                <h2 class="mb-0" id="computerCount">0</h2>
+                                                <span class="small">Total Computers</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-laptop" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Security Events Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-warning bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">Security Events</h6>
+                                                <h2 class="mb-0" id="securityEvents">0</h2>
+                                                <span class="small">Critical Events</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-shield-exclamation" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    <!-- ============================================ -->
+    <!-- 🏗️ SECTION 1: INFRASTRUCTURE & FOUNDATION -->
+    <!-- ============================================ -->
+
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-secondary text-white">
+                    <h4 class="mb-0">
+                        <i class="bi bi-diagram-3 me-2"></i>
+                        Infrastructure & Foundation
+                    </h4>
+                    <small class="text-white-50">Core Active Directory infrastructure components including domain controllers, replication, DNS, and forest structure.</small>
+                </div>
+                <div class="card-body">                    <div class="row">
+                        <div class="col-12">
+
+    <div class="section">
+        <h2>🖥️ Domain Controllers Analysis</h2><div class='error'>Error: Impossible de trouver une forêt identifiée par : « AzureAD ».</div>    </div>
+
+    <div class="section">
+        <h2>📊 DC Performance Metrics</h2>
+        <table>
+            <tr>
+                <th>Domain Controller</th>
+                <th>CPU Usage</th>
+                <th>Memory Usage</th>
+                <th>AD Database Size</th>
+                <th>Log File Size</th>
+                <th>LDAP Connections</th>
+            </tr>        </table>
+    </div>
+
+    <div class="section">
+        <h2>🗄️ AD Database Health</h2>
+        <table>
+            <tr>
+                <th>Domain Controller</th>
+                <th>Database Size</th>
+                <th>Log Size</th>
+                <th>Free Space</th>
+                <th>Last Backup</th>
+                <th>Replication Errors</th>
+            </tr>            <tr><td colspan="6">No database health information available</td></tr>        </table>
+    </div>
+
+    <div class="section">
+        <h2>🔄 Replication Health Assessment</h2><div class='success'>No replication issues detected</div></div>
+<div class="section">
+    <h2>🌐 DNS Configuration Testing</h2><h3>📊 DNS Status Overview</h3><div class='table-responsive'><table class='dns-table'><thead><tr><th>Domain Controller</th><th>Connectivity</th><th>DNS Server IP</th><th>DCDiag DNS</th><th>Domain Resolution</th><th>Reverse Lookup</th><th>Scavenging</th><th>Issues Found</th></tr></thead><tbody><tr class='error'><td><strong>Error</strong></td><td><span class='status error'>Error</span></td><td>N/A</td><td><span class='status error'>Failed</span></td><td>Failed</td><td>Failed</td><td>Unknown</td><td><span class='status warning'>1 issues</span></td></tr></tbody></table></div><h3>🔍 Detailed DNS Issues (1 total)</h3><h4>Issues on Error (1 issues)</h4><h5 class='error'>System Issues (1)</h5><table><thead><tr><th>Issue</th><th>Details</th></tr></thead><tbody><tr class='error'><td>An error occurred during DNS configuration testing: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</td><td>Script execution error</td></tr></tbody></table><div class='success'><h4>📈 DNS Health Summary</h4><div class='info-grid'><p><strong>Online Domain Controllers:</strong> 0 / 1</p><p><strong>Passed DCDiag DNS Tests:</strong> 0 / 0 (online DCs)</p><p><strong>Total DNS Issues Found:</strong> 1</p><p><strong>Obsolete DNS Records:</strong> 0</p></div></div>    </div>
+
+    <div class="section">
+        <h2>👑 FSMO Roles Verification</h2><div class='error'>Error: Impossible de trouver une forêt identifiée par : « AzureAD ».</div>    </div>
+
+    <div class="section">
+        <h2>🤝 Trust Relationships Analysis</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>🏢 AD Sites & Services Audit</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>📋 Group Policy Security Analysis</h2><div class='alert alert-danger'>Failed to analyze Group Policy: Error: Le terme « Get-GPO » n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.</div>    </div>
+
+    <div class="section">
+        <h2>🏗️ Schema Architecture</h2><div class='error'>Schema Analysis Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <!-- ============================================ -->
+    <!-- 👥 SECTION 2: IDENTITY & ACCESS MANAGEMENT -->
+    <!-- ============================================ -->
+
+
+    <div class="section">
+        <h2>👥 User & Computer Accounts Analysis</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <!-- ============================================ -->
+    <!-- 🔒 SECTION 3: SECURITY ANALYSIS -->
+    <!-- ============================================ -->
+
+
+    <div class="section">
+        <h2>🔒 Security Analysis & Risk Assessment</h2><div class='warning'><strong>Security Findings:</strong><ul><li>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</li></ul></div>    </div>
+
+    <div class="section">
+        <h2>🏗️ OU Hierarchy Mapping</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>🔍 Security Events & Error Analysis</h2><div class='success'><h4>✅ No Critical Security Events Found</h4><p>No critical security events were detected in the last 7 days, or the event log analysis encountered issues.</p><p><strong>Analysis Status:</strong> Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</p></div>    </div>
+
+    <div class="section">
+        <h2>👥 Security Group Nesting Analysis</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+    <div class="section">
+        <h2>🔑 Group Managed Service Accounts (gMSA) Usage</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div></div>
+<div class='section'>
+    <h2>🔐 Local Administrator Password Solution (LAPS) Audit</h2><p>No LAPS data found or unable to retrieve.</p>    </div>
+
+    <div class='section'>
+        <h2>🔐 Protocol Security Analysis (LLMNR, SMB, TLS, NTLM)</h2><table>
+        <tr>
+            <th>Domain Controller</th>
+            <th>SMBv1 Enabled</th>
+            <th>SMBv2 Enabled</th>
+            <th>SMBv3 Enabled</th>
+            <th>LLMNR Disabled</th>
+            <th>TLS 1.0</th>
+            <th>TLS 1.1</th>
+            <th>TLS 1.2</th>
+            <th>TLS 1.3</th>
+            <th>NTLM Audit</th>
+        </tr></table>        <h3>Protocol Security Recommendations</h3>
+        <ul>
+            <li><strong>SMBv1:</strong> Disable SMBv1 as it is insecure and vulnerable to exploits like WannaCry.</li>
+            <li><strong>SMBv2/SMBv3:</strong> Keep these enabled but ensure security features (signing/encryption) are enforced where needed.</li>
+            <li><strong>LLMNR:</strong> Disable to reduce exposure to name resolution poisoning attacks.</li>
+            <li><strong>TLS Versions:</strong> Disable TLS 1.0 and 1.1; ensure TLS 1.2 and 1.3 are enabled for secure communications.</li>
+            <li><strong>NTLM Audit:</strong> Configure auditing to monitor and reduce NTLM usage.</li>
+        </ul></div>
+<div class='section'>
+    <h2>🛡 Protocols & Legacy Services Audit</h2><div class='error'>Error: L’opération demandée nécessite une élévation.
+</div>    </div>
+    <div class="section">
+        <h2>🔍 Orphaned SIDs in Active Directory ACLs</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>👤 Privileged Account Monitoring</h2>
+        <div class="subsection">
+            <h3>Administrative Groups Analysis</h3>
+            <table>
+                <tr>
+                    <th>Group Name</th>
+                    <th>Member Count</th>
+                    <th>Last Modified</th>
+                    <th>Inactive Members</th>
+                </tr>                <tr><td colspan="4">No privileged groups found or access denied</td></tr>            </table>
+        </div>
+
+        <div class="subsection">
+            <h3>Service Accounts with High Privileges</h3>
+            <table>
+                <tr>
+                    <th>Account Name</th>
+                    <th>Privileged Groups</th>
+                    <th>Last Logon</th>
+                    <th>Status</th>
+                </tr>                <tr><td colspan="4">No privileged service accounts found</td></tr>            </table>
+        </div>
+
+        <div class="subsection">
+            <h3>Inactive Privileged Accounts (90+ days)</h3>
+            <table>
+                <tr>
+                    <th>User</th>
+                    <th>Group</th>
+                    <th>Last Logon</th>
+                    <th>Days Inactive</th>
+                </tr>                <tr><td colspan="4">No inactive privileged accounts found</td></tr>            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🛡️ AD Object Protection from Accidental Deletion</h2><div class='error'>Object Protection Analysis Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <!-- ============================================ -->
+    <!-- 📊 SECTION 4: PERFORMANCE & HEALTH -->
+    <!-- ============================================ -->
+
+    <div class="section">
+        <h2>📊 Performance & Health Monitoring</h2>
+        <p>System performance metrics, database health, and operational monitoring data.</p>
+    </div>
+
+
+
+
+
+
+# Add SYSVOL and NTDS Integrity Analysis section if data exists
+if (System.Collections.Hashtable.SysvolNtdsAnalysis) {
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Active Directory Audit Report</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
+            margin: 0; padding: 20px 40px; 
+            background: linear-gradient(to bottom right, #f8fafc 0%, #e2e8f0 100%);
+            min-height: 100vh; 
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 0 20px;
+        }
+        
+        /* Header styling - cleaner and more professional */
+        .header { 
+            background: white;
+            color: #1e293b; 
+            padding: 40px 50px; 
+            border-radius: 12px; 
+            margin-bottom: 32px; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-left: 4px solid #3b82f6;
+        }
+        .header h1 { margin: 0 0 20px 0; font-size: 2rem; font-weight: 700; color: #1e293b; }
+        .header p { margin: 6px 0; color: #64748b; font-size: 0.875rem; }
+        
+        /* Section styling - reduced shadows and better spacing */
+        .section { 
+            background: white;
+            margin: 24px 0; 
+            padding: 32px 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            border: 1px solid #e2e8f0;
+        }
+        .section h2 { 
+            color: #1e293b; 
+            border-bottom: 2px solid #e2e8f0; 
+            padding-bottom: 16px; 
+            margin-bottom: 28px; 
+            font-weight: 600; 
+            font-size: 1.375rem;
+        }
+        .section h3 {
+            color: #334155;
+            margin-top: 32px;
+            margin-bottom: 20px;
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        .section h4 {
+            color: #374151;
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .section p {
+            margin-bottom: 16px;
+            color: #4b5563;
+        }
+        
+        /* Alert boxes - softer colors and better contrast */
+        .warning { 
+            background: #fef3c7; 
+            border: 1px solid #f59e0b; 
+            color: #92400e;
+            padding: 20px 24px; 
+            border-radius: 8px; 
+            margin: 24px 0;
+            border-left: 4px solid #f59e0b;
+            font-size: 0.875rem;
+        }
+        .error { 
+            background: #fee2e2; 
+            border: 1px solid #ef4444; 
+            color: #991b1b;
+            padding: 20px 24px; 
+            border-radius: 8px; 
+            margin: 24px 0;
+            border-left: 4px solid #ef4444;
+            font-size: 0.875rem;
+        }
+        .success {
+            background: #dcfce7;
+            border: 1px solid #22c55e;
+            color: #166534;
+            padding: 20px 24px;
+            border-radius: 8px;
+            margin: 24px 0;
+            border-left: 4px solid #22c55e;
+            font-size: 0.875rem;
+        }
+        .info {
+            background: #e0f2fe;
+            border: 1px solid #0284c7;
+            color: #0c4a6e;
+            padding: 20px 24px;
+            border-radius: 8px;
+            margin: 24px 0;
+            border-left: 4px solid #0284c7;
+            font-size: 0.875rem;
+        }
+
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        th, td { border: none; padding: 12px 15px; text-align: left; }
+        th { background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); color: white; font-weight: 500; }
+        tr:nth-child(even) { background-color: rgba(52,152,219,0.05); }
+        
+        /* Status-specific row styling */
+        .table .table-success {
+            background-color: #d4edda !important;
+            color: #155724;
+        }
+        
+        .table .table-warning {
+            background-color: #fff3cd !important;
+            color: #856404;
+        }
+        
+        .table .table-danger {
+            background-color: #f8d7da !important;
+            color: #721c24;
+        }
+        
+        .table .table-info {
+            background-color: #d1ecf1 !important;
+            color: #0c5460;
+        }
+
+        /* Direct info class for table rows */
+        tr.info {
+            background-color: #e0f2fe !important;
+            color: #0c4a6e;
+        }
+
+        tr.info td {
+            background-color: #e0f2fe !important;
+            color: #0c4a6e;
+        }
+
+        /* Info header styling */
+        h5.info {
+            color: #0c4a6e;
+            background-color: #e0f2fe;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border-left: 3px solid #0284c7;
+            margin: 16px 0 8px 0;
+        }
+        
+        .table .table-primary {
+            background-color: #cce7ff !important;
+            color: #004085;
+        }
+
+        /* Table cell specific status styling (without heavy padding) */
+        td.success {
+            background-color: #dcfce7 !important;
+            color: #166534;
+            font-weight: 500;
+        }
+
+        td.warning {
+            background-color: #fef3c7 !important;
+            color: #92400e;
+            font-weight: 500;
+        }
+
+        td.error {
+            background-color: #fee2e2 !important;
+            color: #991b1b;
+            font-weight: 500;
+        }
+
+        /* Badge-like status indicators - subtle styling */
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            line-height: 1.2;
+            text-align: center;
+            white-space: nowrap;
+            vertical-align: baseline;
+            border-radius: 12px;
+            border: 1px solid;
+        }
+
+        .badge-success {
+            color: #166534;
+            background-color: transparent;
+            border-color: #166534;
+        }
+
+        .badge-warning {
+            color: #92400e;
+            background-color: transparent;
+            border-color: #92400e;
+        }
+
+        .badge-danger {
+            color: #991b1b;
+            background-color: transparent;
+            border-color: #991b1b;
+        }
+
+        .badge-info {
+            color: #0c5460;
+            background-color: transparent;
+            border-color: #0c5460;
+        }
+
+        .badge-primary {
+            color: #004085;
+            background-color: transparent;
+            border-color: #004085;
+        }
+        
+        .badge-secondary {
+            color: #fff;
+            background-color: #6c757d;
+        }
+        
+        /* Metric cards - more subtle and professional */
+        .metric { 
+            display: inline-block; 
+            margin: 8px; 
+            padding: 16px; 
+            background: white; 
+            border-radius: 8px; 
+            text-align: center; 
+            min-width: 120px; 
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+            transition: all 0.2s ease; 
+            position: relative;
+        }
+        .metric:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .metric .number { 
+            font-size: 1.75rem; 
+            font-weight: 700; 
+            color: #1e293b; 
+            margin-bottom: 10px; 
+        }
+        .metric .label { 
+            font-size: 0.8rem; 
+            color: #64748b; 
+            font-weight: 500;
+            line-height: 1.3;
+        }
+        
+        /* Export button styling */
+        .export-btn { 
+            position: absolute; 
+            top: 8px; 
+            right: 8px; 
+            background: #3b82f6; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            width: 28px; 
+            height: 28px; 
+            font-size: 12px; 
+            cursor: pointer; 
+            opacity: 0.7; 
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .export-btn:hover { 
+            background: #2563eb; 
+            opacity: 1;
+            transform: scale(1.1);
+        }
+        
+        /* Tree and toggle styling */
+        .ou-tree, .group-tree { margin: 20px 0; }
+        .ou-item, .group-item { margin: 2px 0; }
+        .ou-toggle, .group-toggle { 
+            cursor: pointer; 
+            user-select: none; 
+            padding: 8px 12px; 
+            border-radius: 6px; 
+            transition: all 0.2s ease; 
+            display: inline-block;
+            color: #374151;
+        }
+        .ou-toggle:hover, .group-toggle:hover { 
+            background: #f3f4f6;
+            color: #1f2937;
+        }
+        .ou-toggle::before, .group-toggle::before { 
+            content: '▶'; 
+            display: inline-block; 
+            width: 12px; 
+            color: #6b7280; 
+            font-size: 10px; 
+            transition: transform 0.2s ease; 
+        }
+        .ou-toggle.expanded::before, .group-toggle.expanded::before { 
+            content: '▼'; 
+            transform: rotate(0deg); 
+        }
+        .ou-children, .group-children { 
+            margin-left: 20px; 
+            display: none; 
+            border-left: 2px solid #e5e7eb; 
+            padding-left: 12px; 
+            margin-top: 4px; 
+        }
+        .ou-children.show, .group-children.show { 
+            display: block; 
+            animation: fadeIn 0.2s ease; 
+        }
+        @keyframes fadeIn { 
+            from { opacity: 0; transform: translateY(-4px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+        
+        /* Stats and level styling */
+        .ou-stats, .group-stats { 
+            font-size: 0.75rem; 
+            color: #6b7280; 
+            margin-left: 8px; 
+            background: #f3f4f6; 
+            padding: 2px 8px; 
+            border-radius: 12px; 
+            display: inline-block; 
+        }
+        .ou-level-0 { margin-left: 0px; }
+        .ou-level-1 { margin-left: 16px; }
+        .ou-level-2 { margin-left: 32px; }
+        .ou-level-3 { margin-left: 48px; }
+        .ou-level-4 { margin-left: 64px; }
+        .ou-level-5 { margin-left: 80px; }
+        
+        /* Group tree styling */
+        .group-tree { 
+            max-height: 500px; 
+            overflow-y: auto; 
+            border: 1px solid #e5e7eb; 
+            padding: 16px; 
+            border-radius: 8px; 
+            background: #fafafa; 
+        }
+        .group-tree::-webkit-scrollbar { width: 6px; }
+        .group-tree::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+        .group-tree::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .group-tree::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .group-name { font-weight: 600; color: #374151; }
+        .group-scope { 
+            font-size: 0.75rem; 
+            color: #6b7280; 
+            margin-left: 6px; 
+            background: #e5e7eb; 
+            padding: 2px 6px; 
+            border-radius: 8px; 
+        }
+        
+        /* Risk level styling */
+        .high-risk { color: #dc2626; font-weight: 600; }
+        .medium-risk { color: #d97706; font-weight: 500; }
+        .low-risk { color: #059669; font-weight: 500; }
+        
+        /* Controls panel */
+        .controls-panel { 
+            margin: 28px 0; 
+            padding: 24px; 
+            background: #f8fafc; 
+            border-radius: 8px; 
+            border: 1px solid #e2e8f0; 
+        }
+        .control-btn { 
+            margin: 6px; 
+            padding: 10px 20px; 
+            background: #3b82f6; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: 500; 
+            transition: all 0.2s ease;
+            font-size: 0.8rem;
+        }
+        .control-btn:hover { 
+            background: #2563eb; 
+            transform: translateY(-1px);
+        }
+        .control-btn:active { transform: translateY(0px); }
+        
+        /* Template styling */
+        .template-list { margin: 12px 0; }
+        .template-tag { 
+            display: inline-block; 
+            margin: 4px 6px 4px 0; 
+            padding: 6px 12px; 
+            background: #eff6ff; 
+            border: 1px solid #3b82f6; 
+            border-radius: 16px; 
+            font-size: 0.75rem; 
+            color: #1e40af; 
+            font-weight: 500; 
+            transition: all 0.2s ease; 
+        }
+        .template-tag:hover { 
+            background: #dbeafe;
+            box-shadow: 0 2px 4px rgba(59, 130, 246, 0.1);
+        }
+        
+        /* Status indicators */
+        .status-indicator { 
+            display: flex; 
+            align-items: center; 
+            margin: 12px 0; 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            font-weight: 500; 
+        }
+        .status-indicator.success { 
+            background: #dcfce7; 
+            border: 1px solid #22c55e; 
+            color: #166534; 
+        }
+        .status-indicator.warning { 
+            background: #fef3c7; 
+            border: 1px solid #f59e0b; 
+            color: #92400e; 
+        }
+        .status-indicator .status-icon { margin-right: 8px; font-size: 16px; }
+        .status.success {
+            color: #166534;
+            font-weight: 600;
+            border-left: 2px solid #166534;
+            padding-left: 6px;
+        }
+        .status.warning {
+            color: #92400e;
+            font-weight: 600;
+            border-left: 2px solid #92400e;
+            padding-left: 6px;
+        }
+        .status.error {
+            color: #991b1b;
+            font-weight: 600;
+            border-left: 2px solid #991b1b;
+            padding-left: 6px;
+        }
+        
+        .info-grid { margin: 12px 0; }
+        .info-grid p { margin: 6px 0; }
+        
+        /* Responsive design improvements */
+        @media (max-width: 768px) {
+            body { padding: 12px 16px; font-size: 13px; }
+            .container { max-width: 100%; padding: 0 10px; }
+            .header { padding: 24px 20px; }
+            .header h1 { font-size: 1.5rem; }
+            .section { padding: 20px 24px; margin: 16px 0; }
+            .metric { min-width: 110px; margin: 6px; padding: 14px; }
+            .metric .number { font-size: 1.5rem; }
+            .metric .label { font-size: 0.75rem; }
+            table { font-size: 0.8rem; }
+            th, td { padding: 10px 14px; }
+            .section h2 { font-size: 1.25rem; }
+            .section h3 { font-size: 1rem; }
+        }
+        
+        @media (max-width: 480px) {
+            body { padding: 8px 12px; }
+            .header { padding: 20px 16px; }
+            .section { padding: 16px 20px; }
+            .metric { min-width: 90px; margin: 4px; padding: 12px; }
+        }
+        
+        /* Status indicators with left border styling - more subtle and professional */
+        .status-online {
+            border-left: 4px solid #10b981 !important;
+            background-color: rgba(16, 185, 129, 0.05) !important;
+            padding-left: 12px !important;
+        }
+        .status-warning {
+            border-left: 4px solid #f59e0b !important;
+            background-color: rgba(245, 158, 11, 0.05) !important;
+            padding-left: 12px !important;
+        }
+        .status-error {
+            border-left: 4px solid #ef4444 !important;
+            background-color: rgba(239, 68, 68, 0.05) !important;
+            padding-left: 12px !important;
+        }
+        .status-unknown {
+            border-left: 4px solid #6b7280 !important;
+            background-color: rgba(107, 114, 128, 0.05) !important;
+            padding-left: 12px !important;
+        }
+
+        /* DNS Table specific styles */
+        .table-responsive {
+            overflow-x: auto;
+            margin-bottom: 1rem;
+        }
+
+        .dns-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            background: white;
+        }
+
+        .dns-table th {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            font-weight: 500;
+            padding: 12px 15px;
+            text-align: left;
+            border: none;
+        }
+
+        .dns-table td {
+            padding: 12px 15px;
+            border: none;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .dns-table tr:nth-child(even) {
+            background-color: rgba(52,152,219,0.03);
+        }
+
+        .dns-table tr:hover {
+            background-color: rgba(52,152,219,0.08);
+        }
+
+        .dns-table .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .dns-table .status.success {
+            color: #166534;
+            font-weight: 600;
+            border-left: 3px solid #166534;
+            padding-left: 8px;
+        }
+
+        .dns-table .status.warning {
+            color: #92400e;
+            font-weight: 600;
+            border-left: 3px solid #92400e;
+            padding-left: 8px;
+        }
+
+        .dns-table .status.error {
+            color: #991b1b;
+            font-weight: 600;
+            border-left: 3px solid #991b1b;
+            padding-left: 8px;
+        }
+
+        @media (max-width: 768px) {
+            .dns-table {
+                font-size: 0.875rem;
+            }
+
+            .dns-table th,
+            .dns-table td {
+                padding: 8px 10px;
+            }
+        }
+
+        .fsmo-summary { 
+            margin-top: 16px; 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            font-weight: 500;
+        }
+    </style>
+    <script>
+        function exportToCSV(data, filename) {
+            // Function to properly escape CSV fields
+            function escapeCSVField(field) {
+                if (field === null || field === undefined) {
+                    return '';
+                }
+                const stringField = String(field);
+                // If field contains comma, quotes, or newlines, wrap in quotes and escape internal quotes
+                if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n') || stringField.includes('\r')) {
+                    return '"' + stringField.replace(/"/g, '""') + '"';
+                }
+                return stringField;
+            }
+            
+            const csvContent = "data:text/csv;charset=utf-8," + 
+                data.map(row => row.map(field => escapeCSVField(field)).join(",")).join("\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        function exportUserStats() {
+            const userStats = [
+                ["Metric", "Count"],
+                ["Total Users", ""],
+                ["Enabled Users", ""],
+                ["Disabled Users", ""],
+                ["Password Never Expires", ""],
+                ["Inactive 90+ Days", ""],
+                ["Locked Out Users", ""]
+            ];
+            exportToCSV(userStats, "user_statistics.csv");
+        }
+        
+        function exportComputerStats() {
+            const computerStats = [
+                ["Metric", "Count"],
+                ["Total Computers", ""],
+                ["Enabled Computers", ""],
+                ["Disabled Computers", ""],
+                ["Windows Servers", ""],
+                ["Windows Workstations", ""],
+                ["Inactive 90+ Days", ""]
+            ];
+            exportToCSV(computerStats, "computer_statistics.csv");
+        }
+        
+        // Individual metric export functions
+        function exportEnabledUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Password Last Set"],
+
+            ];
+            exportToCSV(data, "enabled_users.csv");
+        }
+        
+        function exportDisabledUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Password Last Set"],
+
+            ];
+            exportToCSV(data, "disabled_users.csv");
+        }
+        
+        function exportPasswordNeverExpiresUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Password Last Set", "Enabled"],
+
+            ];
+            exportToCSV(data, "password_never_expires_users.csv");
+        }
+        
+        function exportInactiveUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Last Logon", "Enabled"],
+
+            ];
+            exportToCSV(data, "inactive_users_90days.csv");
+        }
+        
+        function exportLockedOutUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Account Lockout Time", "Last Logon"],
+
+            ];
+            exportToCSV(data, "locked_out_users.csv");
+        }
+        
+        function exportEnabledComputers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon"],
+
+            ];
+            exportToCSV(data, "enabled_computers.csv");
+        }
+        
+        function exportDisabledComputers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon"],
+
+            ];
+            exportToCSV(data, "disabled_computers.csv");
+        }
+        
+        function exportInactiveComputers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon"],
+
+            ];
+            exportToCSV(data, "inactive_computers_90days.csv");
+        }
+        
+        function exportWindowsServers() {
+            const data = [
+                ["Name", "Operating System", "Last Logon", "Enabled"],
+
+            ];
+            exportToCSV(data, "windows_servers.csv");
+        }
+        
+        function exportWindowsWorkstations() {
+            const data = [
+                ["Name", "Operating System", "Last Logon", "Enabled"],
+
+            ];
+            exportToCSV(data, "windows_workstations.csv");
+        }
+        
+        function exportTotalUsers() {
+            const data = [
+                ["Name", "SamAccountName", "Enabled", "Last Logon", "Password Last Set", "Password Never Expires", "Locked Out"],
+
+            ];
+            exportToCSV(data, "total_users.csv");
+        }
+        
+        function exportTotalComputers() {
+            const data = [
+                ["Name", "Operating System", "Enabled", "Last Logon", "Type"],
+
+            ];
+            exportToCSV(data, "total_computers.csv");
+        }
+    </script>
+</head>
+<body class="bg-light">
+    <div class="container-fluid">
+        <!-- Header Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-primary text-white">
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h1 class="h3 mb-0">
+                                    <i class="bi bi-shield-check me-2"></i>
+                                    Active Directory Audit Report
+                                </h1>
+                            </div>
+                            <div class="col-md-4 text-md-end">
+                                <small class="opacity-75">
+                                    <i class="bi bi-calendar3 me-1"></i>
+                                    Generated: 2025-09-19 13:22:54
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body bg-gradient">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center mb-2">
+                                    <i class="bi bi-building text-primary me-2"></i>
+                                    <strong class="me-2">Domain:</strong>
+                                    <span class="badge bg-light text-dark">Error retrieving domain</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center mb-2">
+                                    <i class="bi bi-diagram-3 text-success me-2"></i>
+                                    <strong class="me-2">Forest:</strong>
+                                    <span class="badge bg-light text-dark">Error retrieving forest</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Dashboard Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm border-0">
+                    <div class="card-header bg-light">
+                        <h4 class="mb-0">
+                            <i class="bi bi-graph-up text-primary me-2"></i>
+                            Audit Overview & Key Metrics
+                        </h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <!-- Domain Controllers Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-primary bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">Domain Controllers</h6>
+                                                <h2 class="mb-0" id="dcCount">1</h2>
+                                                <span class="small">Total DCs Found</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-server" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- User Accounts Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-success bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">User Accounts</h6>
+                                                <h2 class="mb-0" id="userCount">0</h2>
+                                                <span class="small">Active Users</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-people" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Computer Accounts Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-info bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">Computer Accounts</h6>
+                                                <h2 class="mb-0" id="computerCount">0</h2>
+                                                <span class="small">Total Computers</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-laptop" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Security Events Stats -->
+                            <div class="col-xl-3 col-lg-6 col-md-6">
+                                <div class="card bg-warning bg-gradient text-white h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="text-uppercase text-white-50 small">Security Events</h6>
+                                                <h2 class="mb-0" id="securityEvents">0</h2>
+                                                <span class="small">Critical Events</span>
+                                            </div>
+                                            <div class="align-self-center">
+                                                <i class="bi bi-shield-exclamation" style="font-size: 2rem; opacity: 0.8;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    <!-- ============================================ -->
+    <!-- 🏗️ SECTION 1: INFRASTRUCTURE & FOUNDATION -->
+    <!-- ============================================ -->
+
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-secondary text-white">
+                    <h4 class="mb-0">
+                        <i class="bi bi-diagram-3 me-2"></i>
+                        Infrastructure & Foundation
+                    </h4>
+                    <small class="text-white-50">Core Active Directory infrastructure components including domain controllers, replication, DNS, and forest structure.</small>
+                </div>
+                <div class="card-body">                    <div class="row">
+                        <div class="col-12">
+
+    <div class="section">
+        <h2>🖥️ Domain Controllers Analysis</h2><div class='error'>Error: Impossible de trouver une forêt identifiée par : « AzureAD ».</div>    </div>
+
+    <div class="section">
+        <h2>📊 DC Performance Metrics</h2>
+        <table>
+            <tr>
+                <th>Domain Controller</th>
+                <th>CPU Usage</th>
+                <th>Memory Usage</th>
+                <th>AD Database Size</th>
+                <th>Log File Size</th>
+                <th>LDAP Connections</th>
+            </tr>        </table>
+    </div>
+
+    <div class="section">
+        <h2>🗄️ AD Database Health</h2>
+        <table>
+            <tr>
+                <th>Domain Controller</th>
+                <th>Database Size</th>
+                <th>Log Size</th>
+                <th>Free Space</th>
+                <th>Last Backup</th>
+                <th>Replication Errors</th>
+            </tr>            <tr><td colspan="6">No database health information available</td></tr>        </table>
+    </div>
+
+    <div class="section">
+        <h2>🔄 Replication Health Assessment</h2><div class='success'>No replication issues detected</div></div>
+<div class="section">
+    <h2>🌐 DNS Configuration Testing</h2><h3>📊 DNS Status Overview</h3><div class='table-responsive'><table class='dns-table'><thead><tr><th>Domain Controller</th><th>Connectivity</th><th>DNS Server IP</th><th>DCDiag DNS</th><th>Domain Resolution</th><th>Reverse Lookup</th><th>Scavenging</th><th>Issues Found</th></tr></thead><tbody><tr class='error'><td><strong>Error</strong></td><td><span class='status error'>Error</span></td><td>N/A</td><td><span class='status error'>Failed</span></td><td>Failed</td><td>Failed</td><td>Unknown</td><td><span class='status warning'>1 issues</span></td></tr></tbody></table></div><h3>🔍 Detailed DNS Issues (1 total)</h3><h4>Issues on Error (1 issues)</h4><h5 class='error'>System Issues (1)</h5><table><thead><tr><th>Issue</th><th>Details</th></tr></thead><tbody><tr class='error'><td>An error occurred during DNS configuration testing: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</td><td>Script execution error</td></tr></tbody></table><div class='success'><h4>📈 DNS Health Summary</h4><div class='info-grid'><p><strong>Online Domain Controllers:</strong> 0 / 1</p><p><strong>Passed DCDiag DNS Tests:</strong> 0 / 0 (online DCs)</p><p><strong>Total DNS Issues Found:</strong> 1</p><p><strong>Obsolete DNS Records:</strong> 0</p></div></div>    </div>
+
+    <div class="section">
+        <h2>👑 FSMO Roles Verification</h2><div class='error'>Error: Impossible de trouver une forêt identifiée par : « AzureAD ».</div>    </div>
+
+    <div class="section">
+        <h2>🤝 Trust Relationships Analysis</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>🏢 AD Sites & Services Audit</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>📋 Group Policy Security Analysis</h2><div class='alert alert-danger'>Failed to analyze Group Policy: Error: Le terme « Get-GPO » n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.</div>    </div>
+
+    <div class="section">
+        <h2>🏗️ Schema Architecture</h2><div class='error'>Schema Analysis Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <!-- ============================================ -->
+    <!-- 👥 SECTION 2: IDENTITY & ACCESS MANAGEMENT -->
+    <!-- ============================================ -->
+
+
+    <div class="section">
+        <h2>👥 User & Computer Accounts Analysis</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <!-- ============================================ -->
+    <!-- 🔒 SECTION 3: SECURITY ANALYSIS -->
+    <!-- ============================================ -->
+
+
+    <div class="section">
+        <h2>🔒 Security Analysis & Risk Assessment</h2><div class='warning'><strong>Security Findings:</strong><ul><li>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</li></ul></div>    </div>
+
+    <div class="section">
+        <h2>🏗️ OU Hierarchy Mapping</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>🔍 Security Events & Error Analysis</h2><div class='success'><h4>✅ No Critical Security Events Found</h4><p>No critical security events were detected in the last 7 days, or the event log analysis encountered issues.</p><p><strong>Analysis Status:</strong> Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</p></div>    </div>
+
+    <div class="section">
+        <h2>👥 Security Group Nesting Analysis</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+    <div class="section">
+        <h2>🔑 Group Managed Service Accounts (gMSA) Usage</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div></div>
+<div class='section'>
+    <h2>🔐 Local Administrator Password Solution (LAPS) Audit</h2><p>No LAPS data found or unable to retrieve.</p>    </div>
+
+    <div class='section'>
+        <h2>🔐 Protocol Security Analysis (LLMNR, SMB, TLS, NTLM)</h2><table>
+        <tr>
+            <th>Domain Controller</th>
+            <th>SMBv1 Enabled</th>
+            <th>SMBv2 Enabled</th>
+            <th>SMBv3 Enabled</th>
+            <th>LLMNR Disabled</th>
+            <th>TLS 1.0</th>
+            <th>TLS 1.1</th>
+            <th>TLS 1.2</th>
+            <th>TLS 1.3</th>
+            <th>NTLM Audit</th>
+        </tr></table>        <h3>Protocol Security Recommendations</h3>
+        <ul>
+            <li><strong>SMBv1:</strong> Disable SMBv1 as it is insecure and vulnerable to exploits like WannaCry.</li>
+            <li><strong>SMBv2/SMBv3:</strong> Keep these enabled but ensure security features (signing/encryption) are enforced where needed.</li>
+            <li><strong>LLMNR:</strong> Disable to reduce exposure to name resolution poisoning attacks.</li>
+            <li><strong>TLS Versions:</strong> Disable TLS 1.0 and 1.1; ensure TLS 1.2 and 1.3 are enabled for secure communications.</li>
+            <li><strong>NTLM Audit:</strong> Configure auditing to monitor and reduce NTLM usage.</li>
+        </ul></div>
+<div class='section'>
+    <h2>🛡 Protocols & Legacy Services Audit</h2><div class='error'>Error: L’opération demandée nécessite une élévation.
+</div>    </div>
+    <div class="section">
+        <h2>🔍 Orphaned SIDs in Active Directory ACLs</h2><div class='error'>Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div>    </div>
+
+    <div class="section">
+        <h2>👤 Privileged Account Monitoring</h2>
+        <div class="subsection">
+            <h3>Administrative Groups Analysis</h3>
+            <table>
+                <tr>
+                    <th>Group Name</th>
+                    <th>Member Count</th>
+                    <th>Last Modified</th>
+                    <th>Inactive Members</th>
+                </tr>                <tr><td colspan="4">No privileged groups found or access denied</td></tr>            </table>
+        </div>
+
+        <div class="subsection">
+            <h3>Service Accounts with High Privileges</h3>
+            <table>
+                <tr>
+                    <th>Account Name</th>
+                    <th>Privileged Groups</th>
+                    <th>Last Logon</th>
+                    <th>Status</th>
+                </tr>                <tr><td colspan="4">No privileged service accounts found</td></tr>            </table>
+        </div>
+
+        <div class="subsection">
+            <h3>Inactive Privileged Accounts (90+ days)</h3>
+            <table>
+                <tr>
+                    <th>User</th>
+                    <th>Group</th>
+                    <th>Last Logon</th>
+                    <th>Days Inactive</th>
+                </tr>                <tr><td colspan="4">No inactive privileged accounts found</td></tr>            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🛡️ AD Object Protection from Accidental Deletion</h2><div class='error'>Object Protection Analysis Error: Impossible de trouver un serveur par défaut avec les services Web Active Directory en cours d’exécution.</div> += @"
+    <div class="section">
+        <h2>🛡️ SYSVOL & NTDS Integrity Analysis</h2>
+        <div class="subsection">
+            <h3>SYSVOL Health Checks</h3><p>Unable to perform SYSVOL health checks - insufficient permissions or DC connectivity issues</p>        </div>
+        <div class="subsection">
+            <h3>NTDS.dit Database Integrity</h3><p>Unable to perform NTDS integrity checks - insufficient permissions or DC connectivity issues</p>        </div>
+        <div class="subsection">
+            <h3>Overall Health Summary</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <strong>SYSVOL Health:</strong><span class='status error'>✗ Issues Detected</span>                </div>
+                <div class="info-item">
+                    <strong>NTDS Database Health:</strong><span class='status error'>✗ Issues Detected</span>                </div>
+            </div>
+        </div>
+
+        <div class="subsection">
+            <h3>Recommendations</h3>
+            <div class="info">
+                <h4>🔧 SYSVOL Maintenance</h4>
+                <ul>
+                    <li>Ensure SYSVOL folder is accessible on all domain controllers</li>
+                    <li>Verify NETLOGON share is available and properly configured</li>
+                    <li>Monitor SYSVOL replication status regularly</li>
+                    <li>Check for DFSR vs FRS replication mode consistency</li>
+                </ul>
+
+                <h4>🔧 NTDS Database Maintenance</h4>
+                <ul>
+                    <li>Perform regular offline database integrity checks using esentutl</li>
+                    <li>Monitor database size growth and plan for capacity</li>
+                    <li>Implement regular AD database backups</li>
+                    <li>Monitor transaction log accumulation</li>
+                    <li>Consider database defragmentation during maintenance windows</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <!-- ============================================ -->
+    <!-- 📋 SECTION 6: EXECUTIVE SUMMARY & RECOMMENDATIONS -->
+    <!-- ============================================ -->
+
+
+
+    <!-- ============================================ -->
+    <!-- 📋 EXECUTIVE SUMMARY & RECOMMENDATIONS -->
+    <!-- ============================================ -->
+
+    <div class="section">
+        <h2>🚨 Critical Findings & Immediate Actions</h2>
+        <p>Based on the comprehensive audit analysis, here are the critical security findings that require immediate attention:</p><div class='error'><h3>⚠️ Critical Issues Requiring Immediate Action</h3><p><strong>✅ No critical security issues detected in this audit.</strong></p></div>    </div>
+
+    <div class="section">
+        <h2>📋 Recommendations & Best Practices</h2>
+        <p>The following recommendations are based on security best practices and findings from this audit:</p>
+        
+        <div class="success">
+            <h3>🔒 Security Recommendations</h3>
+            <ul><li>Regularly review and audit Domain Admins group membership (should be minimal)</li><li>Implement Password Settings Objects (PSOs) for privileged accounts with stricter policies</li><li>Reset KRBTGT account password every 180 days maximum</li><li>Enable Active Directory Recycle Bin if not already enabled</li><li>Monitor and clean up inactive user accounts older than 90 days</li><li>Review and disable accounts with non-expiring passwords</li><li>Implement regular security group membership audits</li><li>Ensure all domain controllers are properly maintained and accessible</li><li>Monitor privileged access and implement principle of least privilege</li><li>Regular password policy reviews and enforcement</li>            </ul>
+        </div>
+
+        <div class="warning">
+            <h3>🔄 Ongoing Maintenance</h3>
+            <ul>
+                <li><strong>Monthly:</strong> Review privileged group memberships and inactive accounts</li>
+                <li><strong>Quarterly:</strong> Audit password policies and security group nesting</li>
+                <li><strong>Bi-annually:</strong> Reset KRBTGT password and review trust relationships</li>
+                <li><strong>Annually:</strong> Comprehensive security assessment and schema review</li>
+            </ul>
+        </div>
+
+        <div class="controls-panel">
+            <h4>📊 Implementation Priority</h4>
+            <p><strong>High Priority:</strong> Address all critical findings listed above immediately</p>
+            <p><strong>Medium Priority:</strong> Implement security recommendations within 30 days</p>
+            <p><strong>Low Priority:</strong> Establish ongoing maintenance schedule</p>
+        </div>
+    </div>    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
